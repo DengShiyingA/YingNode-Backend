@@ -124,9 +124,6 @@ generate_materials() {
   TROJAN_PORT="${TROJAN_PORT:-$(random_port)}"
   SS2022_PORT="${SS2022_PORT:-$(random_port)}"
   ANYTLS_PORT="${ANYTLS_PORT:-$(random_port)}"
-  NAIVE_PORT="${NAIVE_PORT:-$(random_port)}"
-  WG_PORT="${WG_PORT:-$(random_port)}"
-  SHADOWTLS_PORT="${SHADOWTLS_PORT:-$(random_port)}"
 
   SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
   SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -hex 16)}"
@@ -137,14 +134,6 @@ generate_materials() {
   echo "$REALITY_PUBLIC" > /etc/s-box/public_reality.key
   echo "$SHORT_ID" > /etc/s-box/short_id.txt
 
-  # WireGuard 密钥对（使用 sing-box 标准生成）
-  local wg_server_kp wg_client_kp
-  wg_server_kp="$(/etc/s-box/sing-box generate wg-keypair)"
-  WG_SERVER_PRIVATE="$(echo "$wg_server_kp" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
-  WG_SERVER_PUBLIC="$(echo "$wg_server_kp" | awk '/PublicKey/ {print $2}' | tr -d '"')"
-  wg_client_kp="$(/etc/s-box/sing-box generate wg-keypair)"
-  WG_CLIENT_PRIVATE="$(echo "$wg_client_kp" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
-  WG_CLIENT_PUBLIC="$(echo "$wg_client_kp" | awk '/PublicKey/ {print $2}' | tr -d '"')"
 
   openssl ecparam -genkey -name prime256v1 -out /etc/s-box/private.key
   openssl req -new -x509 -days 3650 -key /etc/s-box/private.key -out /etc/s-box/cert.pem -subj "/CN=${SNI_DOMAIN}"
@@ -245,19 +234,6 @@ write_config() {
         "certificate_path": "/etc/s-box/cert.pem",
         "key_path": "/etc/s-box/private.key"
       }
-    },
-    {
-      "type": "naive",
-      "tag": "naive-in",
-      "listen": "::",
-      "listen_port": ${NAIVE_PORT},
-      "users": [{ "username": "yingnode", "password": "${UUID}" }],
-      "tls": {
-        "enabled": true,
-        "server_name": "${SNI_DOMAIN}",
-        "certificate_path": "/etc/s-box/cert.pem",
-        "key_path": "/etc/s-box/private.key"
-      }
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -276,9 +252,6 @@ open_firewall_ports() {
     ufw allow ${SS2022_PORT}/tcp || true
     ufw allow ${SS2022_PORT}/udp || true
     ufw allow ${ANYTLS_PORT}/tcp || true
-    ufw allow ${NAIVE_PORT}/tcp || true
-    ufw allow ${WG_PORT}/udp || true
-    ufw allow ${SHADOWTLS_PORT}/tcp || true
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     firewall-cmd --permanent --add-port=${VLESS_PORT}/tcp || true
@@ -289,9 +262,6 @@ open_firewall_ports() {
     firewall-cmd --permanent --add-port=${SS2022_PORT}/tcp || true
     firewall-cmd --permanent --add-port=${SS2022_PORT}/udp || true
     firewall-cmd --permanent --add-port=${ANYTLS_PORT}/tcp || true
-    firewall-cmd --permanent --add-port=${NAIVE_PORT}/tcp || true
-    firewall-cmd --permanent --add-port=${WG_PORT}/udp || true
-    firewall-cmd --permanent --add-port=${SHADOWTLS_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 }
@@ -318,61 +288,6 @@ EOF
   systemctl enable yingnode-sing-box.service
   systemctl restart yingnode-sing-box.service
 
-  # ShadowTLS 服务（如果已安装）
-  if [[ -x /etc/s-box/shadow-tls ]]; then
-    cat > /etc/systemd/system/yingnode-shadowtls.service <<EOF
-[Unit]
-Description=YingNode ShadowTLS Service
-After=network.target yingnode-sing-box.service
-
-[Service]
-Type=simple
-Environment=MONOIO_FORCE_LEGACY_DRIVER=1
-ExecStart=/etc/s-box/shadow-tls --v3 server --listen 0.0.0.0:${SHADOWTLS_PORT} --server 127.0.0.1:${TROJAN_PORT} --tls ${SNI_DOMAIN} --password ${UUID}
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    systemctl enable yingnode-shadowtls.service
-    systemctl restart yingnode-shadowtls.service
-    log "ShadowTLS 服务已启动，端口 ${SHADOWTLS_PORT}"
-  fi
-
-  # NaiveProxy 服务
-  if [[ -x /etc/s-box/naive ]]; then
-    mkdir -p /etc/s-box/naive-config
-    cat > /etc/s-box/naive-config/config.json <<EOF
-{
-  "listen": "https://0.0.0.0:${NAIVE_PORT}",
-  "proxy": "",
-  "auth": "yingnode:${UUID}",
-  "cert": "/etc/s-box/cert.pem",
-  "key": "/etc/s-box/private.key",
-  "log": ""
-}
-EOF
-    cat > /etc/systemd/system/yingnode-naive.service <<EOF
-[Unit]
-Description=YingNode NaiveProxy Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/etc/s-box/naive /etc/s-box/naive-config/config.json
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    systemctl enable yingnode-naive.service
-    systemctl restart yingnode-naive.service
-    log "NaiveProxy 服务已启动，端口 ${NAIVE_PORT}"
-  fi
 }
 
 write_outputs() {
@@ -427,30 +342,8 @@ EOF
 anytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?sni=${SNI_DOMAIN}&insecure=1#YingNode-AnyTLS
 EOF
 
-  cat > /etc/s-box/naive.txt <<EOF
-naive+https://yingnode:${UUID}@${SERVER_IP}:${NAIVE_PORT}#YingNode-Naive
-EOF
 
-  cat > /etc/s-box/wg.txt <<EOF
-[Interface]
-PrivateKey = ${WG_CLIENT_PRIVATE}
-Address = 10.0.0.2/32
-DNS = 1.1.1.1
 
-[Peer]
-PublicKey = ${WG_SERVER_PUBLIC}
-Endpoint = ${SERVER_IP}:${WG_PORT}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOF
-
-  cat > /etc/s-box/shadowtls.txt <<EOF
-ShadowTLS v3
-服务器: ${SERVER_IP}:${SHADOWTLS_PORT}
-密码: ${UUID}
-SNI: ${SNI_DOMAIN}
-上游协议: Trojan (${SERVER_IP}:${TROJAN_PORT})
-EOF
 
   cat > /etc/s-box/sing_box_client.json <<EOF
 {
@@ -486,31 +379,9 @@ rules:
 EOF
 }
 
-install_naiveproxy() {
-  log "安装 NaiveProxy"
-  local arch naive_url
-  arch="$(detect_arch)"
-  case "$arch" in
-    amd64) naive_url="https://github.com/jonssonyan/naive/releases/latest/download/naive-linux-amd64" ;;
-    arm64) naive_url="https://github.com/jonssonyan/naive/releases/latest/download/naive-linux-arm64" ;;
-    *) log "NaiveProxy 不支持当前架构 $arch，跳过"; return 0 ;;
-  esac
-  retry 3 curl -fsSL -o /etc/s-box/naive "$naive_url" || { log "NaiveProxy 下载失败，跳过"; return 0; }
-  chmod +x /etc/s-box/naive
   log "NaiveProxy 安装完成"
 }
 
-install_shadowtls() {
-  log "安装 ShadowTLS"
-  local arch ver url
-  arch="$(detect_arch)"
-  ver="$(curl -s https://api.github.com/repos/ihciah/shadow-tls/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4 || echo 'v0.2.25')"
-  case "$arch" in
-    amd64) url="https://github.com/ihciah/shadow-tls/releases/download/${ver}/shadow-tls-x86_64-unknown-linux-musl" ;;
-    arm64) url="https://github.com/ihciah/shadow-tls/releases/download/${ver}/shadow-tls-aarch64-unknown-linux-musl" ;;
-    *) log "ShadowTLS 不支持当前架构 $arch，跳过"; return 0 ;;
-  esac
-  retry 3 curl -fsSL -o /etc/s-box/shadow-tls "$url" || { log "ShadowTLS 下载失败，跳过"; return 0; }
   chmod +x /etc/s-box/shadow-tls
   log "ShadowTLS 安装完成"
 }
@@ -598,8 +469,6 @@ main() {
   prepare_dirs
   install_singbox
   install_cloudflared
-  install_shadowtls
-  install_naiveproxy
   generate_materials
   write_config
   open_firewall_ports
