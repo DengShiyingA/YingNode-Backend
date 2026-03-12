@@ -137,11 +137,14 @@ generate_materials() {
   echo "$REALITY_PUBLIC" > /etc/s-box/public_reality.key
   echo "$SHORT_ID" > /etc/s-box/short_id.txt
 
-  # WireGuard 密钥对
-  WG_SERVER_PRIVATE="$(/etc/s-box/sing-box generate rand --base64 32 2>/dev/null || openssl rand -base64 32 | tr -d '\n=')"
-  WG_SERVER_PUBLIC="$(echo "$WG_SERVER_PRIVATE" | /etc/s-box/sing-box generate wg-keypair 2>/dev/null | awk '/PublicKey/ {print $2}' || openssl rand -base64 32 | tr -d '\n=')"
-  WG_CLIENT_PRIVATE="$(/etc/s-box/sing-box generate rand --base64 32 2>/dev/null || openssl rand -base64 32 | tr -d '\n=')"
-  WG_CLIENT_PUBLIC="$(echo "$WG_CLIENT_PRIVATE" | /etc/s-box/sing-box generate wg-keypair 2>/dev/null | awk '/PublicKey/ {print $2}' || openssl rand -base64 32 | tr -d '\n=')"
+  # WireGuard 密钥对（使用 sing-box 标准生成）
+  local wg_server_kp wg_client_kp
+  wg_server_kp="$(/etc/s-box/sing-box generate wg-keypair)"
+  WG_SERVER_PRIVATE="$(echo "$wg_server_kp" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
+  WG_SERVER_PUBLIC="$(echo "$wg_server_kp" | awk '/PublicKey/ {print $2}' | tr -d '"')"
+  wg_client_kp="$(/etc/s-box/sing-box generate wg-keypair)"
+  WG_CLIENT_PRIVATE="$(echo "$wg_client_kp" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
+  WG_CLIENT_PUBLIC="$(echo "$wg_client_kp" | awk '/PublicKey/ {print $2}' | tr -d '"')"
 
   openssl ecparam -genkey -name prime256v1 -out /etc/s-box/private.key
   openssl req -new -x509 -days 3650 -key /etc/s-box/private.key -out /etc/s-box/cert.pem -subj "/CN=${SNI_DOMAIN}"
@@ -269,19 +272,6 @@ write_config() {
         "public_key": "${WG_CLIENT_PUBLIC}",
         "allowed_ips": ["0.0.0.0/0", "::/0"]
       }]
-    },
-    {
-      "type": "shadowtls",
-      "tag": "shadowtls-in",
-      "listen": "::",
-      "listen_port": ${SHADOWTLS_PORT},
-      "version": 3,
-      "password": "${UUID}",
-      "handshake": {
-        "server": "${SNI_DOMAIN}",
-        "server_port": 443
-      },
-      "detour": "trojan-in"
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -341,6 +331,62 @@ EOF
   systemctl daemon-reload
   systemctl enable yingnode-sing-box.service
   systemctl restart yingnode-sing-box.service
+
+  # ShadowTLS 服务（如果已安装）
+  if [[ -x /etc/s-box/shadow-tls ]]; then
+    cat > /etc/systemd/system/yingnode-shadowtls.service <<EOF
+[Unit]
+Description=YingNode ShadowTLS Service
+After=network.target yingnode-sing-box.service
+
+[Service]
+Type=simple
+Environment=MONOIO_FORCE_LEGACY_DRIVER=1
+ExecStart=/etc/s-box/shadow-tls --v3 server --listen 0.0.0.0:${SHADOWTLS_PORT} --server 127.0.0.1:${TROJAN_PORT} --tls ${SNI_DOMAIN} --password ${UUID}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable yingnode-shadowtls.service
+    systemctl restart yingnode-shadowtls.service
+    log "ShadowTLS 服务已启动，端口 ${SHADOWTLS_PORT}"
+  fi
+
+  # NaiveProxy 服务
+  if [[ -x /etc/s-box/naive ]]; then
+    mkdir -p /etc/s-box/naive-config
+    cat > /etc/s-box/naive-config/config.json <<EOF
+{
+  "listen": "https://0.0.0.0:${NAIVE_PORT}",
+  "proxy": "",
+  "auth": "yingnode:${UUID}",
+  "cert": "/etc/s-box/cert.pem",
+  "key": "/etc/s-box/private.key",
+  "log": ""
+}
+EOF
+    cat > /etc/systemd/system/yingnode-naive.service <<EOF
+[Unit]
+Description=YingNode NaiveProxy Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/etc/s-box/naive /etc/s-box/naive-config/config.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable yingnode-naive.service
+    systemctl restart yingnode-naive.service
+    log "NaiveProxy 服务已启动，端口 ${NAIVE_PORT}"
+  fi
 }
 
 write_outputs() {
@@ -454,6 +500,48 @@ rules:
 EOF
 }
 
+install_naiveproxy() {
+  log "安装 NaiveProxy (Caddy + forwardproxy)"
+  local arch caddy_url
+  arch="$(detect_arch)"
+  case "$arch" in
+    amd64) caddy_url="https://github.com/klzgrad/naiveproxy/releases/latest/download/naiveproxy-linux-amd64.tar.bz2" ;;
+    arm64) caddy_url="https://github.com/klzgrad/naiveproxy/releases/latest/download/naiveproxy-linux-arm64.tar.bz2" ;;
+    *) log "NaiveProxy 不支持当前架构 $arch，跳过"; return 0 ;;
+  esac
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  retry 3 curl -fsSL -o "$tmpdir/naive.tar.bz2" "$caddy_url" || { log "NaiveProxy 下载失败，跳过"; rm -rf "$tmpdir"; return 0; }
+  tar -xjf "$tmpdir/naive.tar.bz2" -C "$tmpdir" || { log "NaiveProxy 解压失败，跳过"; rm -rf "$tmpdir"; return 0; }
+  local naive_bin
+  naive_bin="$(find "$tmpdir" -name 'naive' -type f | head -1)"
+  if [[ -z "$naive_bin" ]]; then
+    log "NaiveProxy 二进制未找到，跳过"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  cp "$naive_bin" /etc/s-box/naive
+  chmod +x /etc/s-box/naive
+  rm -rf "$tmpdir"
+  log "NaiveProxy 安装完成"
+}
+
+install_shadowtls() {
+  log "安装 ShadowTLS"
+  local arch ver url
+  arch="$(detect_arch)"
+  ver="$(curl -s https://api.github.com/repos/ihciah/shadow-tls/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4 || echo 'v0.2.25')"
+  case "$arch" in
+    amd64) url="https://github.com/ihciah/shadow-tls/releases/download/${ver}/shadow-tls-x86_64-unknown-linux-musl" ;;
+    arm64) url="https://github.com/ihciah/shadow-tls/releases/download/${ver}/shadow-tls-aarch64-unknown-linux-musl" ;;
+    *) log "ShadowTLS 不支持当前架构 $arch，跳过"; return 0 ;;
+  esac
+  retry 3 curl -fsSL -o /etc/s-box/shadow-tls "$url" || { log "ShadowTLS 下载失败，跳过"; return 0; }
+  chmod +x /etc/s-box/shadow-tls
+  log "ShadowTLS 安装完成"
+}
+
 install_panel() {
   log "安装 YingNode 面板"
 
@@ -537,6 +625,8 @@ main() {
   prepare_dirs
   install_singbox
   install_cloudflared
+  install_shadowtls
+  install_naiveproxy
   generate_materials
   write_config
   open_firewall_ports

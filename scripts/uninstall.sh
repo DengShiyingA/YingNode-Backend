@@ -18,6 +18,16 @@ remove_service() {
   safe_systemctl stop yingnode-sing-box.service
   safe_systemctl disable yingnode-sing-box.service
   rm -f /etc/systemd/system/yingnode-sing-box.service
+  # ShadowTLS 服务
+  safe_systemctl stop yingnode-shadowtls.service 2>/dev/null || true
+  safe_systemctl disable yingnode-shadowtls.service 2>/dev/null || true
+  rm -f /etc/systemd/system/yingnode-shadowtls.service
+  rm -f /etc/s-box/shadow-tls
+  # NaiveProxy 服务
+  safe_systemctl stop yingnode-naive.service 2>/dev/null || true
+  safe_systemctl disable yingnode-naive.service 2>/dev/null || true
+  rm -f /etc/systemd/system/yingnode-naive.service
+  rm -rf /etc/s-box/naive /etc/s-box/naive-config
   safe_systemctl daemon-reload
   safe_systemctl reset-failed
 }
