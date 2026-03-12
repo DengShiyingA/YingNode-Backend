@@ -29,7 +29,7 @@ remove_runtime_files() {
   rm -f /etc/s-box/uuid.txt /etc/s-box/private_reality.key /etc/s-box/public_reality.key /etc/s-box/short_id.txt
 
   rm -f /etc/s-box/vl_reality.txt /etc/s-box/vm_ws.txt /etc/s-box/hy2.txt /etc/s-box/tuic5.txt
-  rm -f /etc/s-box/trojan.txt /etc/s-box/ss2022.txt /etc/s-box/an.txt /etc/s-box/naive.txt
+  rm -f /etc/s-box/trojan.txt /etc/s-box/ss2022.txt /etc/s-box/an.txt /etc/s-box/naive.txt /etc/s-box/wg.txt /etc/s-box/shadowtls.txt
   rm -f /etc/s-box/sing_box_client.json /etc/s-box/clash_meta_client.yaml
   rm -f /etc/s-box/cert_info.json /etc/s-box/install_meta.json /etc/s-box/service_status.txt
 
@@ -48,7 +48,7 @@ remove_cloudflared_binary() {
 }
 
 remove_firewall_rules() {
-  local VLESS_PORT="${1:-}" VMESS_PORT="${2:-}" HY2_PORT="${3:-}" TUIC_PORT="${4:-}" TROJAN_PORT="${5:-}" SS2022_PORT="${6:-}" ANYTLS_PORT="${7:-}" NAIVE_PORT="${8:-}"
+  local VLESS_PORT="${1:-}" VMESS_PORT="${2:-}" HY2_PORT="${3:-}" TUIC_PORT="${4:-}" TROJAN_PORT="${5:-}" SS2022_PORT="${6:-}" ANYTLS_PORT="${7:-}" NAIVE_PORT="${8:-}" WG_PORT="${9:-}" SHADOWTLS_PORT="${10:-}"
 
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     log "回收 firewalld 端口"
@@ -61,6 +61,8 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && firewall-cmd --permanent --remove-port=${SS2022_PORT}/udp || true
     [[ -n "$ANYTLS_PORT" ]] && firewall-cmd --permanent --remove-port=${ANYTLS_PORT}/tcp || true
     [[ -n "$NAIVE_PORT" ]] && firewall-cmd --permanent --remove-port=${NAIVE_PORT}/tcp || true
+    [[ -n "$WG_PORT" ]] && firewall-cmd --permanent --remove-port=${WG_PORT}/udp || true
+    [[ -n "$SHADOWTLS_PORT" ]] && firewall-cmd --permanent --remove-port=${SHADOWTLS_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 
@@ -75,6 +77,8 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && ufw delete allow ${SS2022_PORT}/udp || true
     [[ -n "$ANYTLS_PORT" ]] && ufw delete allow ${ANYTLS_PORT}/tcp || true
     [[ -n "$NAIVE_PORT" ]] && ufw delete allow ${NAIVE_PORT}/tcp || true
+    [[ -n "$WG_PORT" ]] && ufw delete allow ${WG_PORT}/udp || true
+    [[ -n "$SHADOWTLS_PORT" ]] && ufw delete allow ${SHADOWTLS_PORT}/tcp || true
   fi
 
   if command -v iptables >/dev/null 2>&1; then
@@ -88,6 +92,8 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && while iptables -C INPUT -p udp --dport ${SS2022_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p udp --dport ${SS2022_PORT} -j ACCEPT || true; done
     [[ -n "$ANYTLS_PORT" ]] && while iptables -C INPUT -p tcp --dport ${ANYTLS_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${ANYTLS_PORT} -j ACCEPT || true; done
     [[ -n "$NAIVE_PORT" ]] && while iptables -C INPUT -p tcp --dport ${NAIVE_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${NAIVE_PORT} -j ACCEPT || true; done
+    [[ -n "$WG_PORT" ]] && while iptables -C INPUT -p udp --dport ${WG_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p udp --dport ${WG_PORT} -j ACCEPT || true; done
+    [[ -n "$SHADOWTLS_PORT" ]] && while iptables -C INPUT -p tcp --dport ${SHADOWTLS_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${SHADOWTLS_PORT} -j ACCEPT || true; done
   fi
 }
 
@@ -138,11 +144,13 @@ main() {
   local SS2022_PORT="${6:-}"
   local ANYTLS_PORT="${7:-}"
   local NAIVE_PORT="${8:-}"
+  local WG_PORT="${9:-}"
+  local SHADOWTLS_PORT="${10:-}"
 
   remove_service
   remove_runtime_files
   remove_cloudflared_binary
-  remove_firewall_rules "$VLESS_PORT" "$VMESS_PORT" "$HY2_PORT" "$TUIC_PORT" "$TROJAN_PORT" "$SS2022_PORT" "$ANYTLS_PORT" "$NAIVE_PORT"
+  remove_firewall_rules "$VLESS_PORT" "$VMESS_PORT" "$HY2_PORT" "$TUIC_PORT" "$TROJAN_PORT" "$SS2022_PORT" "$ANYTLS_PORT" "$NAIVE_PORT" "$WG_PORT" "$SHADOWTLS_PORT"
   uninstall_panel
   verify_cleanup
 

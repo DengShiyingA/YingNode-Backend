@@ -125,6 +125,8 @@ generate_materials() {
   SS2022_PORT="${SS2022_PORT:-$(random_port)}"
   ANYTLS_PORT="${ANYTLS_PORT:-$(random_port)}"
   NAIVE_PORT="${NAIVE_PORT:-$(random_port)}"
+  WG_PORT="${WG_PORT:-$(random_port)}"
+  SHADOWTLS_PORT="${SHADOWTLS_PORT:-$(random_port)}"
 
   SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
   SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -hex 16)}"
@@ -134,6 +136,12 @@ generate_materials() {
   echo "$REALITY_PRIVATE" > /etc/s-box/private_reality.key
   echo "$REALITY_PUBLIC" > /etc/s-box/public_reality.key
   echo "$SHORT_ID" > /etc/s-box/short_id.txt
+
+  # WireGuard 密钥对
+  WG_SERVER_PRIVATE="$(/etc/s-box/sing-box generate rand --base64 32 2>/dev/null || openssl rand -base64 32 | tr -d '\n=')"
+  WG_SERVER_PUBLIC="$(echo "$WG_SERVER_PRIVATE" | /etc/s-box/sing-box generate wg-keypair 2>/dev/null | awk '/PublicKey/ {print $2}' || openssl rand -base64 32 | tr -d '\n=')"
+  WG_CLIENT_PRIVATE="$(/etc/s-box/sing-box generate rand --base64 32 2>/dev/null || openssl rand -base64 32 | tr -d '\n=')"
+  WG_CLIENT_PUBLIC="$(echo "$WG_CLIENT_PRIVATE" | /etc/s-box/sing-box generate wg-keypair 2>/dev/null | awk '/PublicKey/ {print $2}' || openssl rand -base64 32 | tr -d '\n=')"
 
   openssl ecparam -genkey -name prime256v1 -out /etc/s-box/private.key
   openssl req -new -x509 -days 3650 -key /etc/s-box/private.key -out /etc/s-box/cert.pem -subj "/CN=${SNI_DOMAIN}"
@@ -247,6 +255,33 @@ write_config() {
         "certificate_path": "/etc/s-box/cert.pem",
         "key_path": "/etc/s-box/private.key"
       }
+    },
+    {
+      "type": "wireguard",
+      "tag": "wg-in",
+      "listen": "::",
+      "listen_port": ${WG_PORT},
+      "system_interface": false,
+      "interface_name": "wg0",
+      "local_address": ["10.0.0.1/32"],
+      "private_key": "${WG_SERVER_PRIVATE}",
+      "peers": [{
+        "public_key": "${WG_CLIENT_PUBLIC}",
+        "allowed_ips": ["0.0.0.0/0", "::/0"]
+      }]
+    },
+    {
+      "type": "shadowtls",
+      "tag": "shadowtls-in",
+      "listen": "::",
+      "listen_port": ${SHADOWTLS_PORT},
+      "version": 3,
+      "password": "${UUID}",
+      "handshake": {
+        "server": "${SNI_DOMAIN}",
+        "server_port": 443
+      },
+      "detour": "trojan-in"
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -266,6 +301,8 @@ open_firewall_ports() {
     ufw allow ${SS2022_PORT}/udp || true
     ufw allow ${ANYTLS_PORT}/tcp || true
     ufw allow ${NAIVE_PORT}/tcp || true
+    ufw allow ${WG_PORT}/udp || true
+    ufw allow ${SHADOWTLS_PORT}/tcp || true
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     firewall-cmd --permanent --add-port=${VLESS_PORT}/tcp || true
@@ -277,6 +314,8 @@ open_firewall_ports() {
     firewall-cmd --permanent --add-port=${SS2022_PORT}/udp || true
     firewall-cmd --permanent --add-port=${ANYTLS_PORT}/tcp || true
     firewall-cmd --permanent --add-port=${NAIVE_PORT}/tcp || true
+    firewall-cmd --permanent --add-port=${WG_PORT}/udp || true
+    firewall-cmd --permanent --add-port=${SHADOWTLS_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 }
@@ -358,6 +397,27 @@ EOF
 
   cat > /etc/s-box/naive.txt <<EOF
 naive+https://yingnode:${UUID}@${SERVER_IP}:${NAIVE_PORT}#YingNode-Naive
+EOF
+
+  cat > /etc/s-box/wg.txt <<EOF
+[Interface]
+PrivateKey = ${WG_CLIENT_PRIVATE}
+Address = 10.0.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = ${WG_SERVER_PUBLIC}
+Endpoint = ${SERVER_IP}:${WG_PORT}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+
+  cat > /etc/s-box/shadowtls.txt <<EOF
+ShadowTLS v3
+服务器: ${SERVER_IP}:${SHADOWTLS_PORT}
+密码: ${UUID}
+SNI: ${SNI_DOMAIN}
+上游协议: Trojan (${SERVER_IP}:${TROJAN_PORT})
 EOF
 
   cat > /etc/s-box/sing_box_client.json <<EOF

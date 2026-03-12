@@ -7,6 +7,8 @@ NODE_FILES = {
     'Shadowsocks 2022': '/etc/s-box/ss2022.txt',
     'Anytls': '/etc/s-box/an.txt',
     'NaiveProxy': '/etc/s-box/naive.txt',
+    'WireGuard': '/etc/s-box/wg.txt',
+    'ShadowTLS v3': '/etc/s-box/shadowtls.txt',
     'Sing-box 配置': '/etc/s-box/sing_box_client.json',
     'Mihomo 配置': '/etc/s-box/clash_meta_client.yaml',
     '服务状态': '/etc/s-box/service_status.txt',

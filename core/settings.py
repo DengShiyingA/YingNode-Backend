@@ -16,6 +16,8 @@ DEFAULT_SETTINGS = {
     'fixed_ss2022_port': '',
     'fixed_anytls_port': '',
     'fixed_naive_port': '',
+    'fixed_wg_port': '',
+    'fixed_shadowtls_port': '',
     'acme_mode': 'standalone',
     'acme_webroot': '',
     'cf_api_token': '',
