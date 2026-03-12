@@ -258,20 +258,6 @@ write_config() {
         "certificate_path": "/etc/s-box/cert.pem",
         "key_path": "/etc/s-box/private.key"
       }
-    },
-    {
-      "type": "wireguard",
-      "tag": "wg-in",
-      "listen": "::",
-      "listen_port": ${WG_PORT},
-      "system_interface": false,
-      "interface_name": "wg0",
-      "local_address": ["10.0.0.1/32"],
-      "private_key": "${WG_SERVER_PRIVATE}",
-      "peers": [{
-        "public_key": "${WG_CLIENT_PUBLIC}",
-        "allowed_ips": ["0.0.0.0/0", "::/0"]
-      }]
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -501,29 +487,16 @@ EOF
 }
 
 install_naiveproxy() {
-  log "安装 NaiveProxy (Caddy + forwardproxy)"
-  local arch caddy_url
+  log "安装 NaiveProxy"
+  local arch naive_url
   arch="$(detect_arch)"
   case "$arch" in
-    amd64) caddy_url="https://github.com/klzgrad/naiveproxy/releases/latest/download/naiveproxy-linux-amd64.tar.bz2" ;;
-    arm64) caddy_url="https://github.com/klzgrad/naiveproxy/releases/latest/download/naiveproxy-linux-arm64.tar.bz2" ;;
+    amd64) naive_url="https://github.com/jonssonyan/naive/releases/latest/download/naive-linux-amd64" ;;
+    arm64) naive_url="https://github.com/jonssonyan/naive/releases/latest/download/naive-linux-arm64" ;;
     *) log "NaiveProxy 不支持当前架构 $arch，跳过"; return 0 ;;
   esac
-
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  retry 3 curl -fsSL -o "$tmpdir/naive.tar.bz2" "$caddy_url" || { log "NaiveProxy 下载失败，跳过"; rm -rf "$tmpdir"; return 0; }
-  tar -xjf "$tmpdir/naive.tar.bz2" -C "$tmpdir" || { log "NaiveProxy 解压失败，跳过"; rm -rf "$tmpdir"; return 0; }
-  local naive_bin
-  naive_bin="$(find "$tmpdir" -name 'naive' -type f | head -1)"
-  if [[ -z "$naive_bin" ]]; then
-    log "NaiveProxy 二进制未找到，跳过"
-    rm -rf "$tmpdir"
-    return 0
-  fi
-  cp "$naive_bin" /etc/s-box/naive
+  retry 3 curl -fsSL -o /etc/s-box/naive "$naive_url" || { log "NaiveProxy 下载失败，跳过"; return 0; }
   chmod +x /etc/s-box/naive
-  rm -rf "$tmpdir"
   log "NaiveProxy 安装完成"
 }
 
