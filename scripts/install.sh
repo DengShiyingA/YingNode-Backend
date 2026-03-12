@@ -343,8 +343,6 @@ anytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?sni=${SNI_DOMAIN}&insecure=1#YingNo
 EOF
 
 
-
-
   cat > /etc/s-box/sing_box_client.json <<EOF
 {
   "outbounds": [
@@ -377,13 +375,6 @@ proxy-groups:
 rules:
   - MATCH,节点选择
 EOF
-}
-
-  log "NaiveProxy 安装完成"
-}
-
-  chmod +x /etc/s-box/shadow-tls
-  log "ShadowTLS 安装完成"
 }
 
 install_panel() {
