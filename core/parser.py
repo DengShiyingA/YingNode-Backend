@@ -6,6 +6,7 @@ NODE_FILES = {
     'Trojan TLS': '/etc/s-box/trojan.txt',
     'Shadowsocks 2022': '/etc/s-box/ss2022.txt',
     'Anytls': '/etc/s-box/an.txt',
+    'NaiveProxy': '/etc/s-box/naive.txt',
     'Sing-box 配置': '/etc/s-box/sing_box_client.json',
     'Mihomo 配置': '/etc/s-box/clash_meta_client.yaml',
     '服务状态': '/etc/s-box/service_status.txt',

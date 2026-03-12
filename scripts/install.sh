@@ -124,6 +124,7 @@ generate_materials() {
   TROJAN_PORT="${TROJAN_PORT:-$(random_port)}"
   SS2022_PORT="${SS2022_PORT:-$(random_port)}"
   ANYTLS_PORT="${ANYTLS_PORT:-$(random_port)}"
+  NAIVE_PORT="${NAIVE_PORT:-$(random_port)}"
 
   SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
   SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -hex 16)}"
@@ -233,6 +234,19 @@ write_config() {
         "certificate_path": "/etc/s-box/cert.pem",
         "key_path": "/etc/s-box/private.key"
       }
+    },
+    {
+      "type": "naive",
+      "tag": "naive-in",
+      "listen": "::",
+      "listen_port": ${NAIVE_PORT},
+      "users": [{ "username": "yingnode", "password": "${UUID}" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "certificate_path": "/etc/s-box/cert.pem",
+        "key_path": "/etc/s-box/private.key"
+      }
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -251,6 +265,7 @@ open_firewall_ports() {
     ufw allow ${SS2022_PORT}/tcp || true
     ufw allow ${SS2022_PORT}/udp || true
     ufw allow ${ANYTLS_PORT}/tcp || true
+    ufw allow ${NAIVE_PORT}/tcp || true
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     firewall-cmd --permanent --add-port=${VLESS_PORT}/tcp || true
@@ -261,6 +276,7 @@ open_firewall_ports() {
     firewall-cmd --permanent --add-port=${SS2022_PORT}/tcp || true
     firewall-cmd --permanent --add-port=${SS2022_PORT}/udp || true
     firewall-cmd --permanent --add-port=${ANYTLS_PORT}/tcp || true
+    firewall-cmd --permanent --add-port=${NAIVE_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 }
@@ -338,6 +354,10 @@ EOF
 
   cat > /etc/s-box/an.txt <<EOF
 anytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?sni=${SNI_DOMAIN}&insecure=1#YingNode-AnyTLS
+EOF
+
+  cat > /etc/s-box/naive.txt <<EOF
+naive+https://yingnode:${UUID}@${SERVER_IP}:${NAIVE_PORT}#YingNode-Naive
 EOF
 
   cat > /etc/s-box/sing_box_client.json <<EOF

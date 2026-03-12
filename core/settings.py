@@ -15,6 +15,7 @@ DEFAULT_SETTINGS = {
     'fixed_trojan_port': '',
     'fixed_ss2022_port': '',
     'fixed_anytls_port': '',
+    'fixed_naive_port': '',
     'acme_mode': 'standalone',
     'acme_webroot': '',
     'cf_api_token': '',
