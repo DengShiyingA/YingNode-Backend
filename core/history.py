@@ -65,12 +65,16 @@ def save_server(host: str, username: str, note: str = '', password: str = ''):
         password = existing.get('password', '')
     items = [x for x in items if not (x.get('host') == host and x.get('username') == username)]
     history_meta = {}
+    deployed = False
+    status = 'idle'
     if existing:
         history_meta = {
             'last_connect_test': existing.get('last_connect_test', {}),
             'last_availability': existing.get('last_availability', {}),
         }
-    items.insert(0, {'host': host, 'username': username, 'password': password, 'note': note, 'deployed': False, 'status': 'idle', **history_meta})
+        deployed = bool(existing.get('deployed', False))
+        status = (existing.get('status') or ('deployed' if deployed else 'idle')).strip() or ('deployed' if deployed else 'idle')
+    items.insert(0, {'host': host, 'username': username, 'password': password, 'note': note, 'deployed': deployed, 'status': status, **history_meta})
     items = items[:20]
     SERVERS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding='utf-8')
 
