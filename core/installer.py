@@ -69,6 +69,9 @@ def collect_validation(runner: SSHRunner, read_results: dict) -> dict:
         'Trojan TLS': ('trojan_port_listening', 'Trojan 端口监听'),
         'Shadowsocks 2022': ('ss2022_port_listening', 'SS2022 端口监听'),
         'Anytls': ('anytls_port_listening', 'AnyTLS 端口监听'),
+        'NaiveProxy': ('naive_port_listening', 'Naive 端口监听'),
+        'WireGuard': ('wg_port_listening', 'WG 端口监听'),
+        'ShadowTLS v3': ('shadowtls_port_listening', 'ShadowTLS 端口监听'),
     }
     for node_name, (key, label) in port_commands.items():
         port = _extract_port(read_results.get(node_name, ''))
@@ -93,6 +96,9 @@ def collect_validation(runner: SSHRunner, read_results: dict) -> dict:
         'Trojan TLS': ('trojan_output', 'Trojan 节点文件生成'),
         'Shadowsocks 2022': ('ss2022_output', 'SS2022 节点文件生成'),
         'Anytls': ('anytls_output', 'AnyTLS 节点文件生成'),
+        'NaiveProxy': ('naive_output', 'Naive 节点文件生成'),
+        'WireGuard': ('wg_output', 'WireGuard 配置生成'),
+        'ShadowTLS v3': ('shadowtls_output', 'ShadowTLS 节点生成'),
         'Sing-box 配置': ('singbox_output', 'Sing-box 配置生成'),
         'Mihomo 配置': ('mihomo_output', 'Mihomo 配置生成'),
     }
@@ -152,6 +158,12 @@ def deploy_to_server(host: str, username: str, password: str, log=None, settings
                 env_parts.append(f"SS2022_PORT='{deploy_settings['fixed_ss2022_port']}'")
             if deploy_settings.get('fixed_anytls_port'):
                 env_parts.append(f"ANYTLS_PORT='{deploy_settings['fixed_anytls_port']}'")
+            if deploy_settings.get('fixed_naive_port'):
+                env_parts.append(f"NAIVE_PORT='{deploy_settings['fixed_naive_port']}'")
+            if deploy_settings.get('fixed_wg_port'):
+                env_parts.append(f"WG_PORT='{deploy_settings['fixed_wg_port']}'")
+            if deploy_settings.get('fixed_shadowtls_port'):
+                env_parts.append(f"SHADOWTLS_PORT='{deploy_settings['fixed_shadowtls_port']}'")
         env_prefix = (' '.join(env_parts) + ' ') if env_parts else ''
 
         emit('开始执行 YingNode 安装器…这个过程可能持续几分钟。')
@@ -210,7 +222,7 @@ def deploy_to_server(host: str, username: str, password: str, log=None, settings
     qr_dir = project_root / 'static' / 'qrcodes'
     qr_dir.mkdir(parents=True, exist_ok=True)
 
-    qr_enabled_names = {'VLESS Reality', 'VMess WS', 'Hysteria2', 'TUIC v5', 'Trojan TLS', 'Shadowsocks 2022', 'Anytls', 'Argo VMess 节点'}
+    qr_enabled_names = {'VLESS Reality', 'VMess WS', 'Hysteria2', 'TUIC v5', 'WireGuard', 'Trojan TLS', 'Shadowsocks 2022', 'Anytls', 'Argo VMess 节点'}
     for item in nodes:
         content = item['content']
         if item.get('name') in qr_enabled_names and '://' in content:
@@ -229,6 +241,11 @@ def _extract_port(content: str) -> str:
     text = (content or '').strip()
     if not text:
         return ''
+    if 'ListenPort = ' in text:
+        try:
+            return text.split('ListenPort = ')[1].split('\n')[0].strip()
+        except Exception:
+            pass
     if text.startswith('vmess://'):
         try:
             raw = text[len('vmess://'):].strip()
@@ -264,6 +281,9 @@ def uninstall_from_server(host: str, username: str, password: str, log=None) -> 
         trojan = _safe_read_remote(runner, '/etc/s-box/trojan.txt')
         ss2022 = _safe_read_remote(runner, '/etc/s-box/ss2022.txt')
         anytls = _safe_read_remote(runner, '/etc/s-box/an.txt')
+        naive = _safe_read_remote(runner, '/etc/s-box/naive.txt')
+        wg = _safe_read_remote(runner, '/etc/s-box/wg.conf')
+        shadowtls = _safe_read_remote(runner, '/etc/s-box/shadowtls.txt')
         vless_port = _extract_port(vless)
         vmess_port = _extract_port(vmess)
         hy2_port = _extract_port(hy2)
@@ -271,13 +291,16 @@ def uninstall_from_server(host: str, username: str, password: str, log=None) -> 
         trojan_port = _extract_port(trojan)
         ss2022_port = _extract_port(ss2022)
         anytls_port = _extract_port(anytls)
+        naive_port = _extract_port(naive)
+        wg_port = _extract_port(wg)
+        shadowtls_port = _extract_port(shadowtls)
 
         emit('上传卸载脚本…')
         runner.upload(str(local_uninstaller), REMOTE_UNINSTALLER)
         runner.chmod(REMOTE_UNINSTALLER, '755')
 
         emit('开始卸载服务器上的 YingNode 节点…')
-        cmd = f"bash {REMOTE_UNINSTALLER} '{vless_port}' '{vmess_port}' '{hy2_port}' '{tuic_port}' '{trojan_port}' '{ss2022_port}' '{anytls_port}'"
+        cmd = f"bash {REMOTE_UNINSTALLER} '{vless_port}' '{vmess_port}' '{hy2_port}' '{tuic_port}' '{trojan_port}' '{ss2022_port}' '{anytls_port}' '{naive_port}' '{wg_port}' '{shadowtls_port}'"
         code, out, err = runner.run(cmd, timeout=1800)
         if out.strip():
             emit(out.strip())
@@ -298,9 +321,9 @@ def summarize_ports(nodes: list) -> list:
         port = _extract_port(content)
         if not port:
             continue
-        if name in {'VLESS Reality', 'VMess WS', 'Trojan TLS', 'Anytls'}:
+        if name in {'VLESS Reality', 'VMess WS', 'Trojan TLS', 'Anytls', 'NaiveProxy', 'ShadowTLS v3'}:
             ports.append(f"{port}/tcp")
-        elif name in {'Hysteria2', 'TUIC v5'}:
+        elif name in {'Hysteria2', 'TUIC v5', 'WireGuard'}:
             ports.append(f"{port}/udp")
         elif name in {'Shadowsocks 2022'}:
             ports.append(f"{port}/tcp+udp")

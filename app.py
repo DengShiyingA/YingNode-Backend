@@ -158,6 +158,9 @@ def uninstall_preview():
             trojan = read_remote('/etc/s-box/trojan.txt')
             ss2022 = read_remote('/etc/s-box/ss2022.txt')
             anytls = read_remote('/etc/s-box/an.txt')
+            naive = read_remote('/etc/s-box/naive.txt')
+            wg = read_remote('/etc/s-box/wg.conf')
+            shadowtls = read_remote('/etc/s-box/shadowtls.txt')
 
         ports = []
         vp = _extract_port(vless)
@@ -167,6 +170,9 @@ def uninstall_preview():
         trp = _extract_port(trojan)
         sp = _extract_port(ss2022)
         ap = _extract_port(anytls)
+        np = _extract_port(naive)
+        wp = _extract_port(wg)
+        stp = _extract_port(shadowtls)
         if vp: ports.append(f'{vp}/tcp')
         if mp: ports.append(f'{mp}/tcp')
         if hp: ports.append(f'{hp}/udp')
@@ -174,6 +180,9 @@ def uninstall_preview():
         if trp: ports.append(f'{trp}/tcp')
         if sp: ports.append(f'{sp}/tcp+udp')
         if ap: ports.append(f'{ap}/tcp')
+        if np: ports.append(f'{np}/tcp')
+        if wp: ports.append(f'{wp}/udp')
+        if stp: ports.append(f'{stp}/tcp')
         if not ports and cached_ports:
             ports = cached_ports
 
@@ -181,7 +190,7 @@ def uninstall_preview():
         if not installed:
             return jsonify({'ok': False, 'error': '没有检测到这台服务器上已安装的 YingNode 节点服务或端口，已阻止卸载。'}), 400
 
-        return jsonify({'ok': True, 'ports': ports, 'cached': bool(cached_ports and not (vp or mp or hp or tp or trp or sp)), 'installed': installed})
+        return jsonify({'ok': True, 'ports': ports, 'cached': bool(cached_ports and not (vp or mp or hp or tp or trp or sp or ap or np or wp or stp)), 'installed': installed})
     except Exception as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 500
 
