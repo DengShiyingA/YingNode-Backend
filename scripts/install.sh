@@ -244,43 +244,6 @@ write_config() {
         "certificate_path": "/etc/s-box/cert.pem",
         "key_path": "/etc/s-box/private.key"
       }
-    },
-    {
-      "type": "naive",
-      "tag": "naive-in",
-      "listen": "::",
-      "listen_port": ${NAIVE_PORT},
-      "users": [{ "username": "naive", "password": "${UUID}" }],
-      "network": "tcp",
-      "tls": {
-        "enabled": true,
-        "certificate_path": "/etc/s-box/cert.pem",
-        "key_path": "/etc/s-box/private.key"
-      }
-    },
-    {
-      "type": "wireguard",
-      "tag": "wg-in",
-      "listen": "::",
-      "listen_port": ${WG_PORT},
-      "local_address": ["10.0.0.1/24", "fd00::1/64"],
-      "private_key": "${WG_SERVER_PRIVATE}",
-      "peers": [
-        {
-          "peer_public_key": "${WG_CLIENT_PUBLIC}",
-          "allowed_ips": ["10.0.0.2/32", "fd00::2/128"]
-        }
-      ]
-    },
-    {
-      "type": "shadowtls",
-      "tag": "shadowtls-in",
-      "listen": "::",
-      "listen_port": ${SHADOWTLS_PORT},
-      "version": 3,
-      "users": [{ "password": "${SHADOWTLS_PASSWORD}" }],
-      "handshake": { "server": "www.microsoft.com", "server_port": 443 },
-      "detour": "ss2022-in"
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
