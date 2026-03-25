@@ -895,9 +895,13 @@ def get_today_free_nodes():
     # 首次启动，缓存还没准备好
     return jsonify({
         "status": "loading",
-        "message": "节点正在抓取中，请稍后再试（约1-2分钟）...",
-        "nodes_count": 0,
+        "message": "初始节点正在云端抓取测速中，请稍后再试（约1-2分钟）...",
         "subscription": "",
+        "nodes_count": 0,
+        "protocol_stats": {},
+        "nodes_detail": [],
+        "expire_in_hours": 6,
+        "updated_at": ""
     })
 
 
