@@ -853,5 +853,84 @@ def servers_delete():
     return jsonify({'ok': True})
 
 
+# ==================== 免费节点 API ====================
+from core.free_nodes_fetcher import (
+    fetch_free_nodes,
+    start_free_nodes_scheduler,
+)
+from core import free_nodes_fetcher
+
+_free_nodes_fetch_lock = threading.Lock()
+_free_nodes_fetching = False
+
+
+def _bg_fetch_free_nodes():
+    """后台线程抓取免费节点"""
+    global _free_nodes_fetching
+    if _free_nodes_fetching:
+        return
+    with _free_nodes_fetch_lock:
+        _free_nodes_fetching = True
+        try:
+            fetch_free_nodes()
+        finally:
+            _free_nodes_fetching = False
+
+
+@app.route('/api/free/today', methods=['GET'])
+def get_today_free_nodes():
+    cache = free_nodes_fetcher.FREE_NODES_CACHE
+    cache_expired = (
+        cache is None
+        or (time.time() - free_nodes_fetcher.LAST_FETCH_TIME > free_nodes_fetcher.CACHE_DURATION)
+    )
+
+    if cache_expired and not _free_nodes_fetching:
+        # 在后台线程中抓取，不阻塞 HTTP 请求
+        threading.Thread(target=_bg_fetch_free_nodes, daemon=True).start()
+
+    if cache is not None:
+        return jsonify(cache)
+
+    # 首次启动，缓存还没准备好
+    return jsonify({
+        "status": "loading",
+        "message": "节点正在抓取中，请稍后再试（约1-2分钟）...",
+        "nodes_count": 0,
+        "subscription": "",
+    })
+
+
+@app.route('/api/free/subscribe', methods=['GET'])
+def get_free_subscription():
+    """标准订阅链接 —— 直接返回 base64 文本，可添加到任何 VPN 客户端"""
+    from flask import Response
+    cache = free_nodes_fetcher.FREE_NODES_CACHE
+
+    cache_expired = (
+        cache is None
+        or (time.time() - free_nodes_fetcher.LAST_FETCH_TIME > free_nodes_fetcher.CACHE_DURATION)
+    )
+    if cache_expired and not _free_nodes_fetching:
+        threading.Thread(target=_bg_fetch_free_nodes, daemon=True).start()
+
+    if cache is None or not cache.get('subscription'):
+        return Response("", content_type='text/plain; charset=utf-8', status=503)
+
+    return Response(
+        cache['subscription'],
+        content_type='text/plain; charset=utf-8',
+        headers={
+            'Content-Disposition': 'attachment; filename="free_nodes.txt"',
+            'Subscription-Userinfo': f'upload=0; download=0; total=10737418240; expire={int(time.time()) + 86400}',
+            'Profile-Update-Interval': '6',
+        }
+    )
+
+
 if __name__ == '__main__':
+    start_free_nodes_scheduler()
+    # 启动时立即在后台开始抓取
+    threading.Thread(target=_bg_fetch_free_nodes, daemon=True).start()
     app.run(debug=True, host='127.0.0.1', port=5001)
+
