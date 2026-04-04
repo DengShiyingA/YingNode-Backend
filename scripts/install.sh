@@ -47,6 +47,20 @@ prepare_dirs() {
   mkdir -p /etc/s-box
 }
 
+tune_kernel() {
+  log "优化内核网络参数（BBR）"
+  modprobe tcp_bbr 2>/dev/null || true
+  if ! grep -q "tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null; then
+    cat >> /etc/sysctl.conf <<'SYSCTL'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+SYSCTL
+  fi
+  sysctl -p /etc/sysctl.conf >/dev/null 2>&1 || true
+}
+
 check_systemd() {
   command -v systemctl >/dev/null 2>&1 || die "未检测到 systemd，无法自动部署"
 }
@@ -154,6 +168,18 @@ write_config() {
   cat > /etc/s-box/config.json <<EOF
 {
   "log": { "level": "info", "timestamp": true },
+  "dns": {
+    "servers": [
+      { "tag": "cloudflare", "address": "https://1.1.1.1/dns-query", "detour": "direct" },
+      { "tag": "google",     "address": "https://8.8.8.8/dns-query", "detour": "direct" }
+    ],
+    "strategy": "prefer_ipv4",
+    "final": "cloudflare"
+  },
+  "route": {
+    "auto_detect_interface": true,
+    "final": "direct"
+  },
   "inbounds": [
     {
       "type": "vless",
@@ -287,13 +313,16 @@ write_service() {
   cat > /etc/systemd/system/yingnode-sing-box.service <<'EOF'
 [Unit]
 Description=YingNode Sing-box Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/etc/s-box/sing-box run -c /etc/s-box/config.json
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
 LimitNOFILE=1048576
 
 [Install]
@@ -454,14 +483,17 @@ install_panel() {
   cat > /etc/systemd/system/yingnode-panel.service <<'EOF'
 [Unit]
 Description=YingNode Panel
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/yingnode
 ExecStart=/usr/bin/python3 app.py
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Environment=FLASK_ENV=production
 
 [Install]
@@ -496,6 +528,7 @@ main() {
   detect_pkg_mgr
   install_deps
   prepare_dirs
+  tune_kernel
   install_singbox
   install_cloudflared
   generate_materials
