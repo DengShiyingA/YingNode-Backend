@@ -138,16 +138,7 @@ generate_materials() {
   TROJAN_PORT="${TROJAN_PORT:-$(random_port)}"
   SS2022_PORT="${SS2022_PORT:-$(random_port)}"
   ANYTLS_PORT="${ANYTLS_PORT:-$(random_port)}"
-  NAIVE_PORT="${NAIVE_PORT:-$(random_port)}"
-  WG_PORT="${WG_PORT:-$(random_port)}"
-  SHADOWTLS_PORT="${SHADOWTLS_PORT:-$(random_port)}"
-  SHADOWTLS_PASSWORD="${SHADOWTLS_PASSWORD:-$(openssl rand -hex 8)}"
-  WG_SERVER_KP="$(/etc/s-box/sing-box generate wg-keypair)"
-  WG_SERVER_PRIVATE="$(echo "$WG_SERVER_KP" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
-  WG_SERVER_PUBLIC="$(echo "$WG_SERVER_KP" | awk '/PublicKey/ {print $2}' | tr -d '"')"
-  WG_CLIENT_KP="$(/etc/s-box/sing-box generate wg-keypair)"
-  WG_CLIENT_PRIVATE="$(echo "$WG_CLIENT_KP" | awk '/PrivateKey/ {print $2}' | tr -d '"')"
-  WG_CLIENT_PUBLIC="$(echo "$WG_CLIENT_KP" | awk '/PublicKey/ {print $2}' | tr -d '"')"
+  # NaiveProxy / WireGuard / ShadowTLS 当前未在 sing-box config 中启用，跳过端口分配
 
   SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
   SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -hex 16)}"
@@ -288,9 +279,6 @@ open_firewall_ports() {
     ufw allow ${SS2022_PORT}/tcp || true
     ufw allow ${SS2022_PORT}/udp || true
     ufw allow ${ANYTLS_PORT}/tcp || true
-    ufw allow ${NAIVE_PORT}/tcp || true
-    ufw allow ${WG_PORT}/udp || true
-    ufw allow ${SHADOWTLS_PORT}/tcp || true
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     firewall-cmd --permanent --add-port=${VLESS_PORT}/tcp || true
@@ -301,9 +289,6 @@ open_firewall_ports() {
     firewall-cmd --permanent --add-port=${SS2022_PORT}/tcp || true
     firewall-cmd --permanent --add-port=${SS2022_PORT}/udp || true
     firewall-cmd --permanent --add-port=${ANYTLS_PORT}/tcp || true
-    firewall-cmd --permanent --add-port=${NAIVE_PORT}/tcp || true
-    firewall-cmd --permanent --add-port=${WG_PORT}/udp || true
-    firewall-cmd --permanent --add-port=${SHADOWTLS_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 }
@@ -387,27 +372,7 @@ EOF
 anytls://${UUID}@${SERVER_IP}:${ANYTLS_PORT}?sni=${SNI_DOMAIN}&insecure=1#YingNode-AnyTLS
 EOF
 
-  cat > /etc/s-box/naive.txt <<EOF
-naive+https://naive:${UUID}@${SERVER_IP}:${NAIVE_PORT}?padding=true#YingNode-NaiveProxy
-EOF
-
-  cat > /etc/s-box/wg.conf <<EOF
-[Interface]
-PrivateKey = ${WG_CLIENT_PRIVATE}
-Address = 10.0.0.2/24, fd00::2/64
-DNS = 1.1.1.1, 8.8.8.8
-MTU = 1420
-
-[Peer]
-PublicKey = ${WG_SERVER_PUBLIC}
-Endpoint = ${SERVER_IP}:${WG_PORT}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOF
-
-  cat > /etc/s-box/shadowtls.txt <<EOF
-ss://${SS_B64}@${SERVER_IP}:${SHADOWTLS_PORT}/?plugin=shadow-tls&shadow-tls-password=${SHADOWTLS_PASSWORD}&shadow-tls-sni=www.microsoft.com&shadow-tls-version=3#YingNode-ShadowTLS
-EOF
+  # naive / wg / shadowtls 当前未在 sing-box 中启用，不生成节点文件
 
 
   cat > /etc/s-box/sing_box_client.json <<EOF
@@ -467,8 +432,9 @@ install_panel() {
     retry 3 git clone https://github.com/DengShiyingA/YingNode-Backend.git /opt/yingnode
   fi
 
-  # 安装 Python 依赖
-  pip3 install --break-system-packages -r /opt/yingnode/requirements.txt
+  # 安装 Python 依赖（使用 venv 避免污染系统包）
+  python3 -m venv /opt/yingnode/venv
+  /opt/yingnode/venv/bin/pip install -r /opt/yingnode/requirements.txt
 
   # 放行面板端口
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -489,7 +455,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/yingnode
-ExecStart=/usr/bin/python3 app.py
+ExecStart=/opt/yingnode/venv/bin/python3 app.py
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60

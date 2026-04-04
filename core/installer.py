@@ -1,5 +1,6 @@
 import base64
 import json
+import shlex
 from pathlib import Path
 from core.ssh_client import SSHRunner
 from core.parser import NODE_FILES, extract_nodes
@@ -139,31 +140,23 @@ def deploy_to_server(host: str, username: str, password: str, log=None, settings
 
         deploy_settings = settings or {}
         env_parts = []
-        if deploy_settings.get('default_sni'):
-            env_parts.append(f"SNI_DOMAIN='{deploy_settings['default_sni']}'")
-        if deploy_settings.get('default_singbox_version'):
-            env_parts.append(f"SINGBOX_VERSION='{deploy_settings['default_singbox_version']}'")
+        def _env(key, val):
+            if val:
+                env_parts.append(f'{key}={shlex.quote(str(val))}')
+
+        _env('SNI_DOMAIN', deploy_settings.get('default_sni'))
+        _env('SINGBOX_VERSION', deploy_settings.get('default_singbox_version'))
         if deploy_settings.get('port_mode') == 'fixed':
-            if deploy_settings.get('fixed_vless_port'):
-                env_parts.append(f"VLESS_PORT='{deploy_settings['fixed_vless_port']}'")
-            if deploy_settings.get('fixed_vmess_port'):
-                env_parts.append(f"VMESS_PORT='{deploy_settings['fixed_vmess_port']}'")
-            if deploy_settings.get('fixed_hy2_port'):
-                env_parts.append(f"HY2_PORT='{deploy_settings['fixed_hy2_port']}'")
-            if deploy_settings.get('fixed_tuic_port'):
-                env_parts.append(f"TUIC_PORT='{deploy_settings['fixed_tuic_port']}'")
-            if deploy_settings.get('fixed_trojan_port'):
-                env_parts.append(f"TROJAN_PORT='{deploy_settings['fixed_trojan_port']}'")
-            if deploy_settings.get('fixed_ss2022_port'):
-                env_parts.append(f"SS2022_PORT='{deploy_settings['fixed_ss2022_port']}'")
-            if deploy_settings.get('fixed_anytls_port'):
-                env_parts.append(f"ANYTLS_PORT='{deploy_settings['fixed_anytls_port']}'")
-            if deploy_settings.get('fixed_naive_port'):
-                env_parts.append(f"NAIVE_PORT='{deploy_settings['fixed_naive_port']}'")
-            if deploy_settings.get('fixed_wg_port'):
-                env_parts.append(f"WG_PORT='{deploy_settings['fixed_wg_port']}'")
-            if deploy_settings.get('fixed_shadowtls_port'):
-                env_parts.append(f"SHADOWTLS_PORT='{deploy_settings['fixed_shadowtls_port']}'")
+            _env('VLESS_PORT',      deploy_settings.get('fixed_vless_port'))
+            _env('VMESS_PORT',      deploy_settings.get('fixed_vmess_port'))
+            _env('HY2_PORT',        deploy_settings.get('fixed_hy2_port'))
+            _env('TUIC_PORT',       deploy_settings.get('fixed_tuic_port'))
+            _env('TROJAN_PORT',     deploy_settings.get('fixed_trojan_port'))
+            _env('SS2022_PORT',     deploy_settings.get('fixed_ss2022_port'))
+            _env('ANYTLS_PORT',     deploy_settings.get('fixed_anytls_port'))
+            _env('NAIVE_PORT',      deploy_settings.get('fixed_naive_port'))
+            _env('WG_PORT',         deploy_settings.get('fixed_wg_port'))
+            _env('SHADOWTLS_PORT',  deploy_settings.get('fixed_shadowtls_port'))
         env_prefix = (' '.join(env_parts) + ' ') if env_parts else ''
 
         emit('开始执行 YingNode 安装器…这个过程可能持续几分钟。')

@@ -39,7 +39,7 @@ remove_runtime_files() {
   rm -f /etc/s-box/uuid.txt /etc/s-box/private_reality.key /etc/s-box/public_reality.key /etc/s-box/short_id.txt
 
   rm -f /etc/s-box/vl_reality.txt /etc/s-box/vm_ws.txt /etc/s-box/hy2.txt /etc/s-box/tuic5.txt
-  rm -f /etc/s-box/trojan.txt /etc/s-box/ss2022.txt /etc/s-box/an.txt /etc/s-box/naive.txt /etc/s-box/wg.txt /etc/s-box/shadowtls.txt
+  rm -f /etc/s-box/trojan.txt /etc/s-box/ss2022.txt /etc/s-box/an.txt /etc/s-box/naive.txt /etc/s-box/wg.conf /etc/s-box/shadowtls.txt
   rm -f /etc/s-box/sing_box_client.json /etc/s-box/clash_meta_client.yaml
   rm -f /etc/s-box/cert_info.json /etc/s-box/install_meta.json /etc/s-box/service_status.txt
 
