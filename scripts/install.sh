@@ -161,26 +161,14 @@ write_config() {
   "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      {
-        "tag": "cloudflare",
-        "address": "https://1.1.1.1/dns-query",
-        "address_resolver": "local",
-        "address_strategy": "prefer_ipv4"
-      },
-      {
-        "tag": "google",
-        "address": "https://8.8.8.8/dns-query",
-        "address_resolver": "local",
-        "address_strategy": "prefer_ipv4"
-      },
-      { "tag": "local", "address": "local", "detour": "direct" }
+      { "tag": "remote-dns", "address": "1.1.1.1" },
+      { "tag": "local-dns", "address": "local" }
     ],
     "strategy": "prefer_ipv4",
-    "final": "cloudflare"
+    "final": "remote-dns"
   },
   "route": {
     "auto_detect_interface": true,
-    "default_domain_resolver": "cloudflare",
     "final": "direct"
   },
   "inbounds": [
