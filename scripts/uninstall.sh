@@ -58,7 +58,7 @@ remove_cloudflared_binary() {
 }
 
 remove_firewall_rules() {
-  local VLESS_PORT="${1:-}" VMESS_PORT="${2:-}" HY2_PORT="${3:-}" TUIC_PORT="${4:-}" TROJAN_PORT="${5:-}" SS2022_PORT="${6:-}" ANYTLS_PORT="${7:-}" NAIVE_PORT="${8:-}" WG_PORT="${9:-}" SHADOWTLS_PORT="${10:-}"
+  local VLESS_PORT="${1:-}" VMESS_PORT="${2:-}" HY2_PORT="${3:-}" TUIC_PORT="${4:-}" TROJAN_PORT="${5:-}" SS2022_PORT="${6:-}" ANYTLS_PORT="${7:-}"
 
   if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
     log "回收 firewalld 端口"
@@ -70,9 +70,6 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && firewall-cmd --permanent --remove-port=${SS2022_PORT}/tcp || true
     [[ -n "$SS2022_PORT" ]] && firewall-cmd --permanent --remove-port=${SS2022_PORT}/udp || true
     [[ -n "$ANYTLS_PORT" ]] && firewall-cmd --permanent --remove-port=${ANYTLS_PORT}/tcp || true
-    [[ -n "$NAIVE_PORT" ]] && firewall-cmd --permanent --remove-port=${NAIVE_PORT}/tcp || true
-    [[ -n "$WG_PORT" ]] && firewall-cmd --permanent --remove-port=${WG_PORT}/udp || true
-    [[ -n "$SHADOWTLS_PORT" ]] && firewall-cmd --permanent --remove-port=${SHADOWTLS_PORT}/tcp || true
     firewall-cmd --reload || true
   fi
 
@@ -86,9 +83,6 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && ufw delete allow ${SS2022_PORT}/tcp || true
     [[ -n "$SS2022_PORT" ]] && ufw delete allow ${SS2022_PORT}/udp || true
     [[ -n "$ANYTLS_PORT" ]] && ufw delete allow ${ANYTLS_PORT}/tcp || true
-    [[ -n "$NAIVE_PORT" ]] && ufw delete allow ${NAIVE_PORT}/tcp || true
-    [[ -n "$WG_PORT" ]] && ufw delete allow ${WG_PORT}/udp || true
-    [[ -n "$SHADOWTLS_PORT" ]] && ufw delete allow ${SHADOWTLS_PORT}/tcp || true
   fi
 
   if command -v iptables >/dev/null 2>&1; then
@@ -101,32 +95,9 @@ remove_firewall_rules() {
     [[ -n "$SS2022_PORT" ]] && while iptables -C INPUT -p tcp --dport ${SS2022_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${SS2022_PORT} -j ACCEPT || true; done
     [[ -n "$SS2022_PORT" ]] && while iptables -C INPUT -p udp --dport ${SS2022_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p udp --dport ${SS2022_PORT} -j ACCEPT || true; done
     [[ -n "$ANYTLS_PORT" ]] && while iptables -C INPUT -p tcp --dport ${ANYTLS_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${ANYTLS_PORT} -j ACCEPT || true; done
-    [[ -n "$NAIVE_PORT" ]] && while iptables -C INPUT -p tcp --dport ${NAIVE_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${NAIVE_PORT} -j ACCEPT || true; done
-    [[ -n "$WG_PORT" ]] && while iptables -C INPUT -p udp --dport ${WG_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p udp --dport ${WG_PORT} -j ACCEPT || true; done
-    [[ -n "$SHADOWTLS_PORT" ]] && while iptables -C INPUT -p tcp --dport ${SHADOWTLS_PORT} -j ACCEPT 2>/dev/null; do iptables -D INPUT -p tcp --dport ${SHADOWTLS_PORT} -j ACCEPT || true; done
   fi
 }
 
-uninstall_panel() {
-  log "卸载 YingNode 面板"
-
-  systemctl stop yingnode-panel.service 2>/dev/null || true
-  systemctl disable yingnode-panel.service 2>/dev/null || true
-  rm -f /etc/systemd/system/yingnode-panel.service
-  systemctl daemon-reload
-
-  rm -rf /opt/yingnode
-
-  if command -v ufw >/dev/null 2>&1; then
-    ufw delete allow 5001/tcp 2>/dev/null || true
-  fi
-  if command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --remove-port=5001/tcp 2>/dev/null || true
-    firewall-cmd --reload 2>/dev/null || true
-  fi
-
-  log "YingNode 面板已卸载"
-}
 
 verify_cleanup() {
   log "验证卸载结果"
@@ -153,15 +124,11 @@ main() {
   local TROJAN_PORT="${5:-}"
   local SS2022_PORT="${6:-}"
   local ANYTLS_PORT="${7:-}"
-  local NAIVE_PORT="${8:-}"
-  local WG_PORT="${9:-}"
-  local SHADOWTLS_PORT="${10:-}"
 
   remove_service
   remove_runtime_files
   remove_cloudflared_binary
-  remove_firewall_rules "$VLESS_PORT" "$VMESS_PORT" "$HY2_PORT" "$TUIC_PORT" "$TROJAN_PORT" "$SS2022_PORT" "$ANYTLS_PORT" "$NAIVE_PORT" "$WG_PORT" "$SHADOWTLS_PORT"
-  uninstall_panel
+  remove_firewall_rules "$VLESS_PORT" "$VMESS_PORT" "$HY2_PORT" "$TUIC_PORT" "$TROJAN_PORT" "$SS2022_PORT" "$ANYTLS_PORT"
   verify_cleanup
 
   log "YingNode 卸载完成"

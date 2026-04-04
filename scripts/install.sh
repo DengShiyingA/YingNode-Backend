@@ -161,14 +161,26 @@ write_config() {
   "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      { "tag": "cloudflare", "address": "https://1.1.1.1/dns-query", "detour": "direct" },
-      { "tag": "google",     "address": "https://8.8.8.8/dns-query", "detour": "direct" }
+      {
+        "tag": "cloudflare",
+        "address": "https://1.1.1.1/dns-query",
+        "address_resolver": "local",
+        "address_strategy": "prefer_ipv4"
+      },
+      {
+        "tag": "google",
+        "address": "https://8.8.8.8/dns-query",
+        "address_resolver": "local",
+        "address_strategy": "prefer_ipv4"
+      },
+      { "tag": "local", "address": "local", "detour": "direct" }
     ],
     "strategy": "prefer_ipv4",
     "final": "cloudflare"
   },
   "route": {
     "auto_detect_interface": true,
+    "default_domain_resolver": "cloudflare",
     "final": "direct"
   },
   "inbounds": [
@@ -409,78 +421,6 @@ rules:
 EOF
 }
 
-install_panel() {
-  log "安装 YingNode 面板"
-
-  # 安装 Python3 和 pip
-  case "$PKG" in
-    apt)
-      retry 3 apt-get install -y python3 python3-pip python3-venv git
-      ;;
-    dnf)
-      retry 3 dnf install -y python3 python3-pip git
-      ;;
-    yum)
-      retry 3 yum install -y python3 python3-pip git
-      ;;
-  esac
-
-  # 克隆或更新仓库
-  if [[ -d /opt/yingnode ]]; then
-    git -C /opt/yingnode pull --ff-only || true
-  else
-    retry 3 git clone https://github.com/DengShiyingA/YingNode-Backend.git /opt/yingnode
-  fi
-
-  # 安装 Python 依赖（使用 venv 避免污染系统包）
-  python3 -m venv /opt/yingnode/venv
-  /opt/yingnode/venv/bin/pip install -r /opt/yingnode/requirements.txt
-
-  # 放行面板端口
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    ufw allow 5001/tcp || true
-  fi
-  if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
-    firewall-cmd --permanent --add-port=5001/tcp || true
-    firewall-cmd --reload || true
-  fi
-
-  # 写入 systemd 服务
-  cat > /etc/systemd/system/yingnode-panel.service <<'EOF'
-[Unit]
-Description=YingNode Panel
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/yingnode
-ExecStart=/opt/yingnode/venv/bin/python3 app.py
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
-Environment=FLASK_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable yingnode-panel.service
-  systemctl restart yingnode-panel.service
-
-  log "YingNode 面板已启动，端口 5001"
-
-  # 自动注册本机服务器到面板
-  sleep 2
-  mkdir -p /opt/yingnode/data
-  SERVER_IP_LOCAL="$(curl -4 -s --max-time 10 ifconfig.me || hostname -I | awk '{print $1}')"
-  cat > /opt/yingnode/data/servers.json << SERVERS_EOF
-[{"host": "${SERVER_IP_LOCAL}", "username": "root", "note": "", "deployed": true}]
-SERVERS_EOF
-  log "服务器信息已写入面板"
-}
 
 health_check() {
   log "执行健康检查"
@@ -502,7 +442,6 @@ main() {
   open_firewall_ports
   write_service
   write_outputs
-  install_panel
   health_check
   log "安装完成"
 }
