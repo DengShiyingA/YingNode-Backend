@@ -141,7 +141,7 @@ generate_materials() {
   # NaiveProxy / WireGuard / ShadowTLS 当前未在 sing-box config 中启用，跳过端口分配
 
   SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
-  SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -hex 16)}"
+  SS2022_PASSWORD="${SS2022_PASSWORD:-$(openssl rand -base64 16)}"
   VMESS_PATH="/${UUID}-vm"
 
   echo "$UUID" > /etc/s-box/uuid.txt
