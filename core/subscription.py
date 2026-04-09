@@ -375,7 +375,38 @@ def build_singbox_subscription_output(items: List[Dict]) -> str:
     if not merged_outbounds:
         return ''
     config = {
-        'log': {'level': 'info'},
+        'log': {'level': 'info', 'timestamp': True},
+        'dns': {
+            'servers': [
+                {'tag': 'remote-dns', 'address': 'https://1.1.1.1/dns-query', 'detour': 'proxy'},
+                {'tag': 'local-dns', 'address': 'https://223.5.5.5/dns-query', 'detour': 'direct'},
+                {'tag': 'fakeip-dns', 'address': 'fakeip'},
+            ],
+            'rules': [
+                {'outbound': 'any', 'server': 'local-dns'},
+                {'rule_set': 'geosite-cn', 'server': 'local-dns'},
+                {'query_type': ['A', 'AAAA'], 'server': 'fakeip-dns'},
+            ],
+            'fakeip': {
+                'enabled': True,
+                'inet4_range': '198.18.0.0/15',
+                'inet6_range': 'fc00::/18',
+            },
+            'strategy': 'prefer_ipv4',
+            'independent_cache': True,
+        },
+        'inbounds': [
+            {
+                'type': 'tun',
+                'tag': 'tun-in',
+                'inet4_address': '172.19.0.1/30',
+                'inet6_address': 'fdfe:dcba:9876::1/126',
+                'auto_route': True,
+                'strict_route': True,
+                'sniff': True,
+                'sniff_override_destination': True,
+            },
+        ],
         'outbounds': [
             {
                 'type': 'selector',
@@ -393,8 +424,40 @@ def build_singbox_subscription_output(items: List[Dict]) -> str:
                 }
             ] if len(merged_tags) > 1 else []),
             *merged_outbounds,
+            {'type': 'direct', 'tag': 'direct'},
+            {'type': 'block', 'tag': 'block'},
+            {'type': 'dns', 'tag': 'dns-out'},
         ],
-        'route': {'final': 'proxy'},
+        'route': {
+            'auto_detect_interface': True,
+            'final': 'proxy',
+            'rules': [
+                {'protocol': 'dns', 'outbound': 'dns-out'},
+                {'protocol': ['quic', 'stun'], 'outbound': 'block'},
+                {'rule_set': ['geoip-cn', 'geosite-cn'], 'outbound': 'direct'},
+                {'ip_is_private': True, 'outbound': 'direct'},
+            ],
+            'rule_set': [
+                {
+                    'type': 'remote',
+                    'tag': 'geoip-cn',
+                    'format': 'binary',
+                    'url': 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs',
+                    'download_detour': 'direct',
+                },
+                {
+                    'type': 'remote',
+                    'tag': 'geosite-cn',
+                    'format': 'binary',
+                    'url': 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs',
+                    'download_detour': 'direct',
+                },
+            ],
+        },
+        'experimental': {
+            'cache_file': {'enabled': True},
+            'clash_api': {'external_controller': '127.0.0.1:9090'},
+        },
     }
     return json.dumps(config, ensure_ascii=False, indent=2)
 

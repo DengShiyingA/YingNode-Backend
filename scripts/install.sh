@@ -128,7 +128,7 @@ generate_materials() {
   REALITY_PUBLIC="$(echo "$kp" | awk '/PublicKey/ {print $2}' | tr -d '"')"
   SHORT_ID="$(openssl rand -hex 4)"
 
-  SNI_DOMAIN="${SNI_DOMAIN:-www.yahoo.com}"
+  SNI_DOMAIN="${SNI_DOMAIN:-apple.com}"
   SERVER_IP="$(curl -4 -s --max-time 10 ifconfig.me || hostname -I | awk '{print $1}')"
 
   VLESS_PORT="${VLESS_PORT:-$(random_port)}"
@@ -169,7 +169,10 @@ write_config() {
   },
   "route": {
     "auto_detect_interface": true,
-    "final": "direct"
+    "final": "direct",
+    "rules": [
+      { "protocol": ["quic", "stun"], "outbound": "block" }
+    ]
   },
   "inbounds": [
     {
@@ -177,6 +180,8 @@ write_config() {
       "tag": "vless-reality-in",
       "listen": "::",
       "listen_port": ${VLESS_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
       "users": [{ "uuid": "${UUID}", "flow": "xtls-rprx-vision" }],
       "tls": {
         "enabled": true,
@@ -194,11 +199,15 @@ write_config() {
       "tag": "vmess-sb",
       "listen": "::",
       "listen_port": ${VMESS_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
       "users": [{ "uuid": "${UUID}", "alterId": 0 }],
       "transport": {
         "type": "ws",
         "path": "${VMESS_PATH}",
-        "headers": { "Host": "www.bing.com" }
+        "headers": { "Host": "www.bing.com" },
+        "max_early_data": 2048,
+        "early_data_header_name": "Sec-WebSocket-Protocol"
       }
     },
     {
@@ -206,6 +215,9 @@ write_config() {
       "tag": "hy2-in",
       "listen": "::",
       "listen_port": ${HY2_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
+      "ignore_client_bandwidth": false,
       "users": [{ "password": "${UUID}" }],
       "tls": {
         "enabled": true,
@@ -219,6 +231,8 @@ write_config() {
       "tag": "tuic-in",
       "listen": "::",
       "listen_port": ${TUIC_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
       "users": [{ "uuid": "${UUID}", "password": "${UUID}" }],
       "congestion_control": "bbr",
       "tls": {
@@ -233,6 +247,8 @@ write_config() {
       "tag": "trojan-in",
       "listen": "::",
       "listen_port": ${TROJAN_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
       "users": [{ "name": "yingnode", "password": "${UUID}" }],
       "tls": {
         "enabled": true,
@@ -246,6 +262,8 @@ write_config() {
       "tag": "ss2022-in",
       "listen": "::",
       "listen_port": ${SS2022_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
       "method": "${SS2022_METHOD}",
       "password": "${SS2022_PASSWORD}"
     },
@@ -254,6 +272,9 @@ write_config() {
       "tag": "anytls-in",
       "listen": "::",
       "listen_port": ${ANYTLS_PORT},
+      "sniff": true,
+      "sniff_override_destination": true,
+      "padding_scheme": [],
       "users": [{ "name": "yingnode", "password": "${UUID}" }],
       "tls": {
         "enabled": true,
@@ -263,7 +284,10 @@ write_config() {
       }
     }
   ],
-  "outbounds": [{ "type": "direct", "tag": "direct" }]
+  "outbounds": [
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" }
+  ]
 }
 EOF
 }
@@ -304,11 +328,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/etc/s-box/sing-box run -c /etc/s-box/config.json
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
-LimitNOFILE=1048576
+RestartSec=10
+LimitNOFILE=infinity
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
@@ -356,7 +381,7 @@ hysteria2://${UUID}@${SERVER_IP}:${HY2_PORT}?security=tls&alpn=h3&insecure=1&sni
 EOF
 
   cat > /etc/s-box/tuic5.txt <<EOF
-tuic://${UUID}:${UUID}@${SERVER_IP}:${TUIC_PORT}?congestion_control=bbr&alpn=h3&allow_insecure=1&sni=${SNI_DOMAIN}#YingNode-TUIC
+tuic://${UUID}:${UUID}@${SERVER_IP}:${TUIC_PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=1&sni=${SNI_DOMAIN}#YingNode-TUIC
 EOF
 
   cat > /etc/s-box/trojan.txt <<EOF
@@ -377,21 +402,221 @@ EOF
 
   cat > /etc/s-box/sing_box_client.json <<EOF
 {
+  "log": { "level": "info", "timestamp": true },
+  "dns": {
+    "servers": [
+      { "tag": "remote-dns", "address": "https://1.1.1.1/dns-query", "detour": "proxy" },
+      { "tag": "local-dns", "address": "https://223.5.5.5/dns-query", "detour": "direct" },
+      { "tag": "fakeip-dns", "address": "fakeip" }
+    ],
+    "rules": [
+      { "outbound": "any", "server": "local-dns" },
+      { "rule_set": "geosite-cn", "server": "local-dns" },
+      { "query_type": ["A", "AAAA"], "server": "fakeip-dns" }
+    ],
+    "fakeip": {
+      "enabled": true,
+      "inet4_range": "198.18.0.0/15",
+      "inet6_range": "fc00::/18"
+    },
+    "strategy": "prefer_ipv4",
+    "independent_cache": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "inet4_address": "172.19.0.1/30",
+      "inet6_address": "fdfe:dcba:9876::1/126",
+      "auto_route": true,
+      "strict_route": true,
+      "sniff": true,
+      "sniff_override_destination": true
+    }
+  ],
   "outbounds": [
-    { "type": "selector", "tag": "proxy", "outbounds": ["vless", "vmess"] },
-    { "type": "vless", "tag": "vless", "server": "${SERVER_IP}", "server_port": ${VLESS_PORT}, "uuid": "${UUID}" },
-    { "type": "vmess", "tag": "vmess", "server": "${SERVER_IP}", "server_port": ${VMESS_PORT}, "uuid": "${UUID}" }
-  ]
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "default": "auto",
+      "outbounds": ["auto", "vless-reality", "vmess-ws", "hysteria2", "tuic", "trojan", "ss2022", "anytls"]
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["vless-reality", "vmess-ws", "hysteria2", "tuic", "trojan", "ss2022", "anytls"],
+      "url": "http://www.gstatic.com/generate_204",
+      "interval": "10m"
+    },
+    {
+      "type": "vless",
+      "tag": "vless-reality",
+      "server": "${SERVER_IP}",
+      "server_port": ${VLESS_PORT},
+      "uuid": "${UUID}",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "utls": { "enabled": true, "fingerprint": "chrome" },
+        "reality": {
+          "enabled": true,
+          "public_key": "${REALITY_PUBLIC}",
+          "short_id": "${SHORT_ID}"
+        }
+      },
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vmess",
+      "tag": "vmess-ws",
+      "server": "${SERVER_IP}",
+      "server_port": ${VMESS_PORT},
+      "uuid": "${UUID}",
+      "security": "auto",
+      "transport": {
+        "type": "ws",
+        "path": "${VMESS_PATH}",
+        "headers": { "Host": "www.bing.com" },
+        "max_early_data": 2048,
+        "early_data_header_name": "Sec-WebSocket-Protocol"
+      },
+      "packet_encoding": "packetaddr"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hysteria2",
+      "server": "${SERVER_IP}",
+      "server_port": ${HY2_PORT},
+      "password": "${UUID}",
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "insecure": true,
+        "alpn": ["h3"]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic",
+      "server": "${SERVER_IP}",
+      "server_port": ${TUIC_PORT},
+      "uuid": "${UUID}",
+      "password": "${UUID}",
+      "congestion_control": "bbr",
+      "udp_relay_mode": "native",
+      "heartbeat": "10s",
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "insecure": true,
+        "alpn": ["h3"]
+      }
+    },
+    {
+      "type": "trojan",
+      "tag": "trojan",
+      "server": "${SERVER_IP}",
+      "server_port": ${TROJAN_PORT},
+      "password": "${UUID}",
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "insecure": true
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss2022",
+      "server": "${SERVER_IP}",
+      "server_port": ${SS2022_PORT},
+      "method": "${SS2022_METHOD}",
+      "password": "${SS2022_PASSWORD}"
+    },
+    {
+      "type": "anytls",
+      "tag": "anytls",
+      "server": "${SERVER_IP}",
+      "server_port": ${ANYTLS_PORT},
+      "password": "${UUID}",
+      "tls": {
+        "enabled": true,
+        "server_name": "${SNI_DOMAIN}",
+        "insecure": true
+      }
+    },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" },
+    { "type": "dns", "tag": "dns-out" }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy",
+    "rules": [
+      { "protocol": "dns", "outbound": "dns-out" },
+      { "protocol": ["quic", "stun"], "outbound": "block" },
+      { "rule_set": ["geoip-cn", "geosite-cn"], "outbound": "direct" },
+      { "ip_is_private": true, "outbound": "direct" }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "geoip-cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+        "download_detour": "direct"
+      },
+      {
+        "type": "remote",
+        "tag": "geosite-cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+        "download_detour": "direct"
+      }
+    ]
+  },
+  "experimental": {
+    "cache_file": { "enabled": true },
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090"
+    }
+  }
 }
 EOF
 
   cat > /etc/s-box/clash_meta_client.yaml <<EOF
+port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+unified-delay: true
+find-process-mode: strict
+
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  fallback:
+    - https://1.0.0.1/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
 proxies:
   - name: vless-reality
     type: vless
     server: ${SERVER_IP}
     port: ${VLESS_PORT}
     uuid: ${UUID}
+    network: tcp
     tls: true
     servername: ${SNI_DOMAIN}
     flow: xtls-rprx-vision
@@ -399,12 +624,87 @@ proxies:
       public-key: ${REALITY_PUBLIC}
       short-id: ${SHORT_ID}
     client-fingerprint: chrome
+
+  - name: vmess-ws
+    type: vmess
+    server: ${SERVER_IP}
+    port: ${VMESS_PORT}
+    uuid: ${UUID}
+    alterId: 0
+    cipher: auto
+    network: ws
+    ws-opts:
+      path: ${VMESS_PATH}
+      headers:
+        Host: www.bing.com
+      max-early-data: 2048
+      early-data-header-name: Sec-WebSocket-Protocol
+
+  - name: hysteria2
+    type: hysteria2
+    server: ${SERVER_IP}
+    port: ${HY2_PORT}
+    password: ${UUID}
+    alpn:
+      - h3
+    skip-cert-verify: true
+
+  - name: tuic
+    type: tuic
+    server: ${SERVER_IP}
+    port: ${TUIC_PORT}
+    uuid: ${UUID}
+    password: ${UUID}
+    congestion-controller: bbr
+    udp-relay-mode: native
+    heartbeat-interval: 10000
+    alpn:
+      - h3
+    skip-cert-verify: true
+
+  - name: trojan
+    type: trojan
+    server: ${SERVER_IP}
+    port: ${TROJAN_PORT}
+    password: ${UUID}
+    sni: ${SNI_DOMAIN}
+    skip-cert-verify: true
+
+  - name: ss2022
+    type: ss
+    server: ${SERVER_IP}
+    port: ${SS2022_PORT}
+    cipher: ${SS2022_METHOD}
+    password: ${SS2022_PASSWORD}
+
 proxy-groups:
   - name: 节点选择
     type: select
     proxies:
+      - 自动选择
       - vless-reality
+      - vmess-ws
+      - hysteria2
+      - tuic
+      - trojan
+      - ss2022
+
+  - name: 自动选择
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    proxies:
+      - vless-reality
+      - vmess-ws
+      - hysteria2
+      - tuic
+      - trojan
+      - ss2022
+
 rules:
+  - GEOIP,CN,DIRECT
+  - GEOSITE,cn,DIRECT
+  - GEOIP,private,DIRECT
   - MATCH,节点选择
 EOF
 }
