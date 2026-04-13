@@ -1,6 +1,16 @@
 import os
 import threading
 import time
+
+# Load environment variables from .env (if present) before anything else
+# reads os.environ — YINGNODE_SECRET_KEY / YINGNODE_AUTH_REQUIRED /
+# YINGNODE_ADMIN_* all depend on this being done first.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from flask import Flask, jsonify, render_template, request
 from core.history import delete_history_by_host, delete_history_entry, delete_server, get_history_entry, get_latest_cert_history_by_host, get_latest_ports_by_host, get_latest_validation_by_host, get_latest_warning_history_by_host, get_recent_cert_history_by_host, load_history, load_servers, save_entry, save_server, set_last_availability, set_last_connect_test, set_server_status, summarize_validation_issue, update_server_runtime_status
 from core.installer import deploy_to_server, summarize_ports, uninstall_from_server
@@ -11,10 +21,34 @@ from core.argo_remote import get_remote_argo_status, start_remote_temporary_argo
 from core.cert_remote import build_remote_cert_status, check_remote_acme_ready, switch_remote_cert_mode, validate_remote_cert_switch
 from core.cert_reminder import load_cert_reminder_state, mark_cert_reminder_sent, pick_cert_reminder_candidate
 from core.subscription import build_server_subscription_snapshot, build_subscription_aggregate, build_subscription_download_response, invalidate_subscription_snapshot
+from core.db import init_db
+from core.auth import auth_bp, ensure_default_user, print_pairing_banner, require_auth_before_request
+from core.crypto import _load_secret_key
+from core.api_protocols import api_protocols_bp
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
-app.secret_key = os.environ.get('YINGNODE_SECRET_KEY') or os.urandom(32).hex()
+# Use the persistent secret key from core.crypto (loaded from env or on-disk
+# file) so session signatures survive across process restarts.
+app.secret_key = _load_secret_key()
+
+# Database + auth bootstrap. init_db() is idempotent; ensure_default_user()
+# creates a single admin account on first run only.
+init_db()
+ensure_default_user()
+
+# Register /auth/* routes (pair, login, logout, me).
+app.register_blueprint(auth_bp)
+
+# Register /api/* routes for incremental protocol management (P0-3).
+app.register_blueprint(api_protocols_bp)
+
+# Global bearer-token check. Advisory (doesn't block) unless the
+# YINGNODE_AUTH_REQUIRED env var is truthy — see core/auth.py.
+app.before_request(require_auth_before_request)
+
+# Surface the pairing token in server logs for first-run client setup.
+print_pairing_banner()
 
 _argo_status_cache = {}
 _ARGO_STATUS_CACHE_TTL = 2.0

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets — NEVER commit
+.env
+
+# Entire runtime data directory.
+# Contains SQLite DB, secret_key, servers.json (plaintext passwords before
+# migration), settings.json (cf_api_token + ssh_private_key), and history.
+# None of this belongs in version control. The directory itself is created
+# on first run via core/db.py + core/crypto.py.
+data/
+
+# Logs
+py_err.txt
+*.log
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
