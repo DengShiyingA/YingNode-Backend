@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import shlex
 import time
 from core.ssh_client import SSHRunner
 
@@ -14,13 +15,19 @@ REMOTE_ARGO_TOKEN = '/etc/s-box/argo_token.txt'
 
 
 def _read_remote(runner: SSHRunner, path: str) -> str:
-    code, out, err = runner.run(f"test -f {path} && cat {path} || true")
+    q = shlex.quote(path)
+    code, out, err = runner.run(f"test -f {q} && cat {q} || true")
     return out.strip() if code == 0 else ''
 
 
 def _write_remote(runner: SSHRunner, path: str, content: str):
+    # `path` is always one of the module-level REMOTE_* constants, but we
+    # still refuse anything that isn't a plain POSIX path so a future caller
+    # can't accidentally turn this into a Python-heredoc injection point.
+    if not re.match(r'^/[A-Za-z0-9._/\-]+$', path):
+        raise ValueError(f"refusing to write to unsafe remote path: {path!r}")
     payload = json.dumps(content)
-    runner.run(f"python3 - <<'PY'\nfrom pathlib import Path\nPath('{path}').write_text({payload}, encoding='utf-8')\nPY")
+    runner.run(f"python3 - <<'PY'\nfrom pathlib import Path\nPath({path!r}).write_text({payload}, encoding='utf-8')\nPY")
 
 
 def _get_vmess_inbound_remote(runner: SSHRunner):
@@ -41,7 +48,11 @@ def _get_pid_running(runner: SSHRunner):
     pid = _read_remote(runner, REMOTE_ARGO_PID)
     if not pid:
         return False
-    code, out, err = runner.run(f"kill -0 {pid} >/dev/null 2>&1; echo $? || true")
+    # `pid` is read from a remote file and therefore attacker-influenceable
+    # once the VPS is reachable; refuse anything that isn't a plain integer.
+    if not re.match(r'^\d+$', pid.strip()):
+        return False
+    code, out, err = runner.run(f"kill -0 {int(pid)} >/dev/null 2>&1; echo $? || true")
     return (out or '').strip() == '0'
 
 

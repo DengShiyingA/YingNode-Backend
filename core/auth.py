@@ -1,11 +1,11 @@
 """Bearer token authentication for the YingNode control panel.
 
-Two failure modes are gated by the ``YINGNODE_AUTH_REQUIRED`` env var:
+``YINGNODE_AUTH_REQUIRED`` controls enforcement:
 
-- ``0`` / unset (default):   auth is **advisory** — routes accept any caller
-  so existing iOS clients keep working while they get updated to send tokens.
-- ``1`` / ``true`` / ``yes``: auth is **enforced** — every request without a
-  valid bearer token is rejected with 401.
+- unset / ``1`` / ``true`` (default):  every non-public route rejects
+  callers without a valid bearer token.
+- ``0`` / ``false``:  advisory mode — callers without a token pass
+  through. Only use while a trusted client is still being updated.
 
 Whitelisted paths (always open) are defined in ``PUBLIC_PATHS``: the root
 health page, static assets, and the auth endpoints themselves.
@@ -13,8 +13,8 @@ health page, static assets, and the auth endpoints themselves.
 The iOS client obtains a token by POSTing to ``/auth/login`` with JSON
 ``{"username": "...", "password": "..."}``. The first call to
 ``ensure_default_user()`` on an empty database bootstraps a single admin
-account; the default credentials are read from the environment or fall back
-to ``admin / admin`` with a stderr warning.
+account using ``YINGNODE_ADMIN_PASSWORD`` — boot aborts if that env var
+is missing so there's no silent ``admin/admin`` default.
 """
 from __future__ import annotations
 
@@ -22,9 +22,12 @@ import ipaddress
 import os
 import socket
 import sys
+import threading
+import time
+from collections import deque
 from datetime import datetime
 from functools import wraps
-from typing import Callable, Optional
+from typing import Callable, Deque, Dict, Optional, Tuple
 
 from flask import Blueprint, g, jsonify, request
 
@@ -62,8 +65,64 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
 def _auth_required() -> bool:
-    return (os.environ.get("YINGNODE_AUTH_REQUIRED", "").strip().lower()
-            in {"1", "true", "yes", "on"})
+    """Enforcement defaults to ON. Operators can disable it transiently by
+    setting ``YINGNODE_AUTH_REQUIRED=0`` while migrating clients."""
+    raw = os.environ.get("YINGNODE_AUTH_REQUIRED", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+# ---- Login rate limiting -------------------------------------------
+#
+# Tracks failed login attempts per remote IP in memory. Five failures in
+# 15 minutes locks that IP out for 15 more minutes. Restarting the process
+# clears the table — acceptable for a small self-hosted panel; anyone
+# running a fleet should front this with a real rate limiter.
+
+_LOGIN_WINDOW_SECONDS = 900
+_LOGIN_MAX_FAILURES = 5
+_LOGIN_LOCKOUT_SECONDS = 900
+
+_login_failures: Dict[str, Deque[float]] = {}
+_login_lockouts: Dict[str, float] = {}
+_login_lock = threading.Lock()
+
+
+def _login_client_ip() -> str:
+    return request.remote_addr or "unknown"
+
+
+def _login_is_locked(ip: str) -> Tuple[bool, int]:
+    now = time.monotonic()
+    with _login_lock:
+        until = _login_lockouts.get(ip)
+        if until is None:
+            return False, 0
+        if until <= now:
+            _login_lockouts.pop(ip, None)
+            _login_failures.pop(ip, None)
+            return False, 0
+        return True, int(until - now)
+
+
+def _login_record_failure(ip: str) -> None:
+    now = time.monotonic()
+    cutoff = now - _LOGIN_WINDOW_SECONDS
+    with _login_lock:
+        bucket = _login_failures.setdefault(ip, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        bucket.append(now)
+        if len(bucket) >= _LOGIN_MAX_FAILURES:
+            _login_lockouts[ip] = now + _LOGIN_LOCKOUT_SECONDS
+            bucket.clear()
+
+
+def _login_record_success(ip: str) -> None:
+    with _login_lock:
+        _login_failures.pop(ip, None)
+        _login_lockouts.pop(ip, None)
 
 
 def _is_public_path(path: str) -> bool:
@@ -130,15 +189,22 @@ def require_auth(view: Callable):
 # ---- User bootstrap --------------------------------------------------
 
 
+class BootstrapCredentialError(RuntimeError):
+    """Raised when ``ensure_default_user`` can't create an admin safely."""
+
+
 def ensure_default_user() -> None:
     """On first boot with an empty ``users`` table, create a single admin
-    account so the panel isn't permanently locked out. Credentials:
+    account so the panel isn't permanently locked out.
 
-    - ``YINGNODE_ADMIN_USERNAME`` / ``YINGNODE_ADMIN_PASSWORD`` env vars, or
-    - fall back to ``admin`` / ``admin`` with a stderr warning.
+    The admin password **must** be supplied via ``YINGNODE_ADMIN_PASSWORD``
+    on first boot. Earlier versions silently fell back to ``admin/admin``
+    if the env var was missing — that shipped live panels with a known
+    default. We now refuse to start instead, forcing the operator to set
+    a real password (``install.sh`` generates one).
     """
     username = os.environ.get("YINGNODE_ADMIN_USERNAME", "").strip() or "admin"
-    password = os.environ.get("YINGNODE_ADMIN_PASSWORD", "").strip() or "admin"
+    password = os.environ.get("YINGNODE_ADMIN_PASSWORD", "").strip()
 
     # Make sure the schema exists — auth may be called before any route
     # that would otherwise trigger init_db via core.history import.
@@ -148,6 +214,19 @@ def ensure_default_user() -> None:
         existing = session.query(User).count()
         if existing > 0:
             return
+
+        if not password:
+            raise BootstrapCredentialError(
+                "YINGNODE_ADMIN_PASSWORD is not set. Refusing to bootstrap the "
+                "admin account with a default password. Set a strong password "
+                "in the environment (or .env) before first boot."
+            )
+        if password == "admin" or len(password) < 8:
+            raise BootstrapCredentialError(
+                "YINGNODE_ADMIN_PASSWORD must be at least 8 characters and "
+                "cannot be the literal string 'admin'."
+            )
+
         user = User(
             username=username,
             password_hash=hash_password(password),
@@ -157,14 +236,7 @@ def ensure_default_user() -> None:
         session.add(user)
         session.commit()
         session.refresh(user)
-        if password == "admin":
-            print(
-                f"[auth] Bootstrap admin user created with default password 'admin'. "
-                f"Set YINGNODE_ADMIN_PASSWORD before first run to avoid this warning.",
-                file=sys.stderr,
-            )
-        else:
-            print(f"[auth] Bootstrap admin user '{username}' created.", file=sys.stderr)
+        print(f"[auth] Bootstrap admin user '{username}' created.", file=sys.stderr)
 
 
 # ---- Routes ---------------------------------------------------------
@@ -214,16 +286,29 @@ def pair():
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
+    ip = _login_client_ip()
+    locked, retry_after = _login_is_locked(ip)
+    if locked:
+        resp = jsonify({
+            "ok": False,
+            "error": "too_many_attempts",
+            "retry_after": retry_after,
+        })
+        resp.headers["Retry-After"] = str(retry_after)
+        return resp, 429
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
 
     if not username or not password:
+        _login_record_failure(ip)
         return jsonify({"ok": False, "error": "missing_credentials"}), 400
 
     with get_session() as session:
         user = session.query(User).filter_by(username=username).one_or_none()
         if not user or not verify_password(password, user.password_hash):
+            _login_record_failure(ip)
             return jsonify({"ok": False, "error": "invalid_credentials"}), 401
 
         # Rotate token on every successful login so old tokens are invalidated.
@@ -231,6 +316,7 @@ def login():
         user.last_login_at = datetime.utcnow()
         session.commit()
 
+        _login_record_success(ip)
         return jsonify({
             "ok": True,
             "user": {

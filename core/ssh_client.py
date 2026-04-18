@@ -1,6 +1,7 @@
 import io
 import os
 import posixpath
+import threading
 import time
 import warnings
 import paramiko
@@ -10,6 +11,68 @@ try:
     warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, module='paramiko')
 except Exception:
     pass
+
+
+# ---- Host key pinning ---------------------------------------------
+#
+# AutoAddPolicy silently trusts any fingerprint the server offers, which
+# is a MITM hazard on every first connection *and* on every connection
+# from a machine that never cached the key. We persist known fingerprints
+# to ``data/known_hosts`` (TOFU): first connect pins, later connects must
+# match. Operators can delete a line (or the whole file) to re-pin after
+# a deliberate VPS rebuild.
+
+def _known_hosts_path() -> str:
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(base, 'data')
+    os.makedirs(data_dir, exist_ok=True)
+    return os.path.join(data_dir, 'known_hosts')
+
+
+class _PinOnFirstUsePolicy(paramiko.MissingHostKeyPolicy):
+    """Trust-on-first-use: add new host keys to the known-hosts file and
+    reject anything that doesn't match an already-pinned fingerprint.
+
+    Paramiko calls this policy only when ``load_host_keys`` didn't find
+    the server. That's exactly the moment we want to pin. Subsequent
+    connections hit the cached key automatically and a mismatch fails
+    hard inside paramiko before this policy runs.
+    """
+
+    _lock = threading.Lock()
+
+    def missing_host_key(self, client, hostname, key):
+        path = _known_hosts_path()
+        with self._lock:
+            # Re-check under the lock in case a concurrent connect pinned
+            # the same host already.
+            host_keys = paramiko.HostKeys()
+            if os.path.exists(path):
+                try:
+                    host_keys.load(path)
+                except Exception:
+                    pass
+            existing = host_keys.lookup(hostname)
+            if existing is not None and existing.get(key.get_name()) is not None:
+                stored = existing.get(key.get_name())
+                if stored and stored.asbytes() == key.asbytes():
+                    client.get_host_keys().add(hostname, key.get_name(), key)
+                    return
+                raise paramiko.SSHException(
+                    f"Host key for {hostname} does not match the pinned key. "
+                    f"If this VPS was deliberately rebuilt, remove the entry "
+                    f"from data/known_hosts and retry."
+                )
+            host_keys.add(hostname, key.get_name(), key)
+            try:
+                host_keys.save(path)
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+            except OSError:
+                pass
+            client.get_host_keys().add(hostname, key.get_name(), key)
 
 
 def _load_private_key_from_text(key_text: str):
@@ -59,7 +122,13 @@ class SSHRunner:
         retries = 2
         for attempt in range(1, retries + 1):
             self.client = paramiko.SSHClient()
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            known_hosts = _known_hosts_path()
+            if os.path.exists(known_hosts):
+                try:
+                    self.client.load_host_keys(known_hosts)
+                except Exception:
+                    pass
+            self.client.set_missing_host_key_policy(_PinOnFirstUsePolicy())
             try:
                 if pkey and effective_mode in {'key', 'auto'}:
                     try:

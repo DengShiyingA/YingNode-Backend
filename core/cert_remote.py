@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from core.ssh_client import SSHRunner
@@ -8,7 +9,8 @@ REMOTE_CONFIG = '/etc/s-box/config.json'
 
 
 def _read_remote(runner: SSHRunner, path: str) -> str:
-    code, out, err = runner.run(f"test -f {path} && cat {path} || true")
+    q = shlex.quote(path)
+    code, out, err = runner.run(f"test -f {q} && cat {q} || true")
     return out.strip() if code == 0 else ''
 
 
@@ -46,7 +48,7 @@ def find_remote_cert_paths(config: dict):
 def remote_file_exists(runner: SSHRunner, path: str) -> bool:
     if not path:
         return False
-    code, out, err = runner.run(f"test -f {path} && echo yes || true")
+    code, out, err = runner.run(f"test -f {shlex.quote(path)} && echo yes || true")
     return (out or '').strip() == 'yes'
 
 
@@ -55,7 +57,7 @@ def read_remote_cert_openssl_meta(runner: SSHRunner, cert_path: str):
         return {}
 
     code, out, err = runner.run(
-        f"openssl x509 -in '{cert_path}' -noout -dates -subject -issuer 2>/dev/null || true"
+        f"openssl x509 -in {shlex.quote(cert_path)} -noout -dates -subject -issuer 2>/dev/null || true"
     )
     base_text = (out or '').strip()
     if not base_text:
@@ -274,9 +276,9 @@ def check_remote_acme_ready(host: str, username: str, password: str, expected_do
         checks.append({'key': 'openssl_ready', 'label': 'OpenSSL 可用', 'passed': (out or '').strip() == 'yes', 'detail': '已检测 openssl' if (out or '').strip() == 'yes' else '远端未检测到 openssl'})
 
         if acme_mode == 'webroot':
-            code, out, err = runner.run(f"test -d '{acme_webroot}' && echo yes || true")
+            code, out, err = runner.run(f"test -d {shlex.quote(acme_webroot)} && echo yes || true")
             checks.append({'key': 'webroot_present', 'label': 'Webroot 路径存在', 'passed': (out or '').strip() == 'yes', 'detail': acme_webroot or '未填写 webroot 路径'})
-            code, out, err = runner.run(f"test -w '{acme_webroot}' && echo yes || true") if acme_webroot else (0, '', '')
+            code, out, err = runner.run(f"test -w {shlex.quote(acme_webroot)} && echo yes || true") if acme_webroot else (0, '', '')
             checks.append({'key': 'webroot_writable', 'label': 'Webroot 路径可写', 'passed': bool(acme_webroot) and (out or '').strip() == 'yes', 'detail': acme_webroot or '未填写 webroot 路径'})
         elif acme_mode == 'dns_cf':
             token = (cf_api_token or '').strip()
@@ -284,9 +286,13 @@ def check_remote_acme_ready(host: str, username: str, password: str, expected_do
             format_ok = bool(re.match(r'^[A-Za-z0-9._\-]{20,}$', token)) if token else False
             checks.append({'key': 'cf_token_format', 'label': 'Cloudflare Token 格式初检', 'passed': format_ok, 'detail': '格式看起来正常' if format_ok else 'Token 为空或格式异常'})
             verify_ok = False
-            if token:
+            if token and format_ok:
+                # Only hit the API once the token passes the strict regex above.
+                # Prevents a user-supplied token from smuggling shell metachars
+                # into the remote curl invocation.
+                auth_header = shlex.quote(f"Authorization: Bearer {token}")
                 code, out, err = runner.run(
-                    "curl -s --max-time 10 -H \"Authorization: Bearer {token}\" -H \"Content-Type: application/json\" https://api.cloudflare.com/client/v4/user/tokens/verify || true".format(token=token)
+                    f"curl -s --max-time 10 -H {auth_header} -H 'Content-Type: application/json' https://api.cloudflare.com/client/v4/user/tokens/verify || true"
                 )
                 text = (out or err or '').lower()
                 verify_ok = '"success":true' in text and '"status":"active"' in text
@@ -294,10 +300,14 @@ def check_remote_acme_ready(host: str, username: str, password: str, expected_do
 
             zone_found = False
             zone_hit = ''
-            if token and server_name:
+            if token and format_ok and server_name:
+                auth_header = shlex.quote(f"Authorization: Bearer {token}")
                 for zone_name in _guess_zone_candidates(server_name):
+                    if not re.match(r'^[A-Za-z0-9.\-]+$', zone_name):
+                        continue
+                    url = shlex.quote(f"https://api.cloudflare.com/client/v4/zones?name={zone_name}")
                     code, out, err = runner.run(
-                        "curl -s --max-time 10 -H \"Authorization: Bearer {token}\" -H \"Content-Type: application/json\" \"https://api.cloudflare.com/client/v4/zones?name={zone}\" || true".format(token=token, zone=zone_name)
+                        f"curl -s --max-time 10 -H {auth_header} -H 'Content-Type: application/json' {url} || true"
                     )
                     text = (out or err or '').lower()
                     if '"success":true' in text and '"result":[]' not in text:
@@ -430,6 +440,16 @@ def switch_remote_cert_mode(host: str, username: str, password: str, mode: str, 
         if not server_name:
             raise RuntimeError('未检测到可用于生成证书的域名，请先确认当前 SNI 或 server_name。')
 
+        # Validate user-supplied inputs before we splice them into shell
+        # commands that run as root on the VPS. A hostname with a shell
+        # metacharacter would otherwise be a remote code execution vector.
+        if not re.match(r'^[A-Za-z0-9.\-]{1,253}$', server_name):
+            raise RuntimeError('server_name 含有非法字符，仅允许字母、数字、点和短横线。')
+        if acme_webroot and not re.match(r'^/[A-Za-z0-9._/\-]{1,255}$', acme_webroot):
+            raise RuntimeError('acme_webroot 必须是仅含字母数字与 ./_- 的绝对路径。')
+        if cf_api_token and not re.match(r'^[A-Za-z0-9._\-]{20,}$', cf_api_token):
+            raise RuntimeError('Cloudflare API Token 格式不合法。')
+
         cert_dir = _path_parent(cert_path)
         key_dir = _path_parent(key_path)
         _mark_stage(stages, 'prepare', 'done', '已确认当前证书与私钥路径')
@@ -441,15 +461,22 @@ def switch_remote_cert_mode(host: str, username: str, password: str, mode: str, 
             temp_cert = cert_path + '.tmp'
             temp_key = key_path + '.tmp'
             temp_pub = cert_path + '.pub.tmp'
-            subj = f'/CN={server_name}'
+            qtc = shlex.quote(temp_cert)
+            qtk = shlex.quote(temp_key)
+            qtp = shlex.quote(temp_pub)
+            qcp = shlex.quote(cert_path)
+            qkp = shlex.quote(key_path)
+            qcd = shlex.quote(cert_dir)
+            qkd = shlex.quote(key_dir)
+            qsubj = shlex.quote(f'/CN={server_name}')
             cmd = (
-                f"mkdir -p '{cert_dir}' '{key_dir}' && "
-                f"openssl ecparam -name prime256v1 -genkey -noout -out '{temp_key}' >/dev/null 2>&1 && "
-                f"openssl req -new -x509 -key '{temp_key}' -out '{temp_cert}' -days 365 -subj '{subj}' >/dev/null 2>&1 && "
-                f"openssl pkey -in '{temp_key}' -pubout -out '{temp_pub}' >/dev/null 2>&1 && "
-                f"openssl x509 -in '{temp_cert}' -pubkey -noout | diff -q - '{temp_pub}' >/dev/null 2>&1 && "
-                f"mv '{temp_cert}' '{cert_path}' && mv '{temp_key}' '{key_path}' && rm -f '{temp_pub}' && "
-                f"chmod 600 '{key_path}' && chmod 644 '{cert_path}'"
+                f"mkdir -p {qcd} {qkd} && "
+                f"openssl ecparam -name prime256v1 -genkey -noout -out {qtk} >/dev/null 2>&1 && "
+                f"openssl req -new -x509 -key {qtk} -out {qtc} -days 365 -subj {qsubj} >/dev/null 2>&1 && "
+                f"openssl pkey -in {qtk} -pubout -out {qtp} >/dev/null 2>&1 && "
+                f"openssl x509 -in {qtc} -pubkey -noout | diff -q - {qtp} >/dev/null 2>&1 && "
+                f"mv {qtc} {qcp} && mv {qtk} {qkp} && rm -f {qtp} && "
+                f"chmod 600 {qkp} && chmod 644 {qcp}"
             )
             code, out, err = runner.run(cmd, timeout=60)
             if code != 0:
@@ -470,21 +497,26 @@ def switch_remote_cert_mode(host: str, username: str, password: str, mode: str, 
                 if code != 0:
                     _mark_stage(stages, 'issue', 'error', _short_error(err, out))
                     raise RuntimeError('远端安装 acme.sh 失败，请检查网络环境。' + (f'\n\n详情：{_short_error(err, out)}' if _short_error(err, out) else ''))
+            qsn = shlex.quote(server_name)
+            qcd = shlex.quote(cert_dir)
+            qkd = shlex.quote(key_dir)
             if acme_mode == 'webroot':
+                qwr = shlex.quote(acme_webroot)
                 issue_cmd = (
-                    f"mkdir -p '{cert_dir}' '{key_dir}' '{acme_webroot}' && "
-                    f"{home}/acme.sh --issue -d '{server_name}' --webroot '{acme_webroot}' --server letsencrypt --keylength ec-256 --force"
+                    f"mkdir -p {qcd} {qkd} {qwr} && "
+                    f"{home}/acme.sh --issue -d {qsn} --webroot {qwr} --server letsencrypt --keylength ec-256 --force"
                 )
             elif acme_mode == 'dns_cf':
+                qtoken = shlex.quote(cf_api_token)
                 issue_cmd = (
-                    f"export CF_Token='{cf_api_token}' && "
-                    f"mkdir -p '{cert_dir}' '{key_dir}' && "
-                    f"{home}/acme.sh --issue -d '{server_name}' --dns dns_cf --server letsencrypt --keylength ec-256 --force"
+                    f"export CF_Token={qtoken} && "
+                    f"mkdir -p {qcd} {qkd} && "
+                    f"{home}/acme.sh --issue -d {qsn} --dns dns_cf --server letsencrypt --keylength ec-256 --force"
                 )
             else:
                 issue_cmd = (
-                    f"mkdir -p '{cert_dir}' '{key_dir}' && "
-                    f"{home}/acme.sh --issue -d '{server_name}' --standalone --server letsencrypt --keylength ec-256 --force"
+                    f"mkdir -p {qcd} {qkd} && "
+                    f"{home}/acme.sh --issue -d {qsn} --standalone --server letsencrypt --keylength ec-256 --force"
                 )
             code, out, err = runner.run(issue_cmd, timeout=240)
             if code != 0:
@@ -496,14 +528,14 @@ def switch_remote_cert_mode(host: str, username: str, password: str, mode: str, 
             current_stage = 'install'
             _emit_stage(progress, mode, current_stage, stages, '开始安装 ACME 证书到当前路径')
             install_cert_cmd = (
-                f"{home}/acme.sh --install-cert -d '{server_name}' "
-                f"--ecc --fullchain-file '{cert_path}' --key-file '{key_path}'"
+                f"{home}/acme.sh --install-cert -d {qsn} "
+                f"--ecc --fullchain-file {shlex.quote(cert_path)} --key-file {shlex.quote(key_path)}"
             )
             code, out, err = runner.run(install_cert_cmd, timeout=120)
             if code != 0:
                 _mark_stage(stages, 'install', 'error', _short_error(err, out))
                 raise RuntimeError('ACME 证书已申请，但安装到当前证书路径失败。' + (f'\n\n详情：{_short_error(err, out)}' if _short_error(err, out) else ''))
-            runner.run(f"chmod 600 '{key_path}' && chmod 644 '{cert_path}'", timeout=20)
+            runner.run(f"chmod 600 {shlex.quote(key_path)} && chmod 644 {shlex.quote(cert_path)}", timeout=20)
             _mark_stage(stages, 'install', 'done', '证书已安装到当前主证书路径')
             _emit_stage(progress, mode, current_stage, stages, '证书已安装到当前主证书路径')
         else:

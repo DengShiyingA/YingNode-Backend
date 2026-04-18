@@ -15,7 +15,8 @@
 #   2. Clones the repo to /opt/yingnode-backend
 #   3. Creates a virtualenv and pip-installs dependencies
 #   4. Bootstraps a .env file (with a random admin password)
-#   5. Writes a systemd unit that runs waitress on 0.0.0.0:5001
+#   5. Writes a systemd unit that runs waitress on 127.0.0.1:5001
+#      (override with YINGNODE_LISTEN_HOST=0.0.0.0 to expose publicly)
 #   6. Starts the service and prints the pairing info for the iOS client
 #      (Pair URL + ASCII QR code, ready to scan with the YingNode app)
 #
@@ -28,7 +29,7 @@ REPO_BRANCH="${YINGNODE_REPO_BRANCH:-main}"
 INSTALL_DIR="${YINGNODE_INSTALL_DIR:-/opt/yingnode-backend}"
 SERVICE_NAME="yingnode-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-LISTEN_HOST="${YINGNODE_LISTEN_HOST:-0.0.0.0}"
+LISTEN_HOST="${YINGNODE_LISTEN_HOST:-127.0.0.1}"
 LISTEN_PORT="${YINGNODE_LISTEN_PORT:-5001}"
 
 # ---- Colors ----------------------------------------------------------
@@ -151,7 +152,7 @@ bootstrap_env_file() {
 YINGNODE_SECRET_KEY=${secret_key}
 YINGNODE_ADMIN_USERNAME=admin
 YINGNODE_ADMIN_PASSWORD=${admin_password}
-YINGNODE_AUTH_REQUIRED=0
+YINGNODE_AUTH_REQUIRED=1
 
 YINGNODE_HOST=${LISTEN_HOST}
 YINGNODE_PORT=${LISTEN_PORT}
@@ -239,7 +240,7 @@ fetch_pair_info() {
     printf "${C_BOLD}============================================================${C_RESET}\n"
     printf "  Listen:       ${C_GREEN}http://%s:%s${C_RESET}\n" "$host" "$port"
     printf "  Admin user:   ${C_GREEN}admin${C_RESET}   (password in .env)\n"
-    printf "  Auth mode:    ${C_YELLOW}advisory${C_RESET} (set YINGNODE_AUTH_REQUIRED=1 to enforce)\n"
+    printf "  Auth mode:    ${C_GREEN}enforced${C_RESET} (set YINGNODE_AUTH_REQUIRED=0 to disable while migrating clients)\n"
     if [ -n "$token" ]; then
         printf "  Token:        ${C_GREEN}%s${C_RESET}\n" "$token"
         printf "  Pair URL:     ${C_GREEN}%s${C_RESET}\n" "$url"
